@@ -20,7 +20,17 @@ async fn entry(
     let path = req.uri().path().to_string();
     let is_backend =
         media::is_media_path(&path) || gateway::is_llm_path(&path) || path.starts_with("/api/");
-    let result: Result<Response<Body>, AppError> = if media::is_media_path(&path) {
+    let result: Result<Response<Body>, AppError> = if path == "/api/auth/oidc"
+        || path.starts_with("/api/auth/oidc/")
+        || path == "/api/auth/saml"
+        || path.starts_with("/api/auth/saml/")
+    {
+        crate::remaining_infra::handle_oidc_saml(
+            &state, req.method(), &path, &serde_json::Value::Null,
+        ).await
+    } else if path == "/api/tags" {
+        Ok(crate::ollama::tags(req.method()))
+    } else if media::is_media_path(&path) {
         media::handle(state, peer, req).await
     } else if gateway::is_llm_path(&path) {
         gateway::handle(state, peer, req).await

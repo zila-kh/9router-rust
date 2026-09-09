@@ -184,6 +184,17 @@ fn combo_targets(state: &AppState, requested: &str) -> Result<Vec<String>, AppEr
     Ok(out)
 }
 
+pub async fn execute_target_direct(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    caller: Format,
+    wants_stream: bool,
+    canonical: Value,
+    target: &str,
+) -> Result<Response<Body>, AppError> {
+    execute_target(state, headers, caller, wants_stream, canonical, target).await
+}
+
 async fn execute_target(
     state: &AppState,
     client_headers: &HeaderMap,

@@ -553,6 +553,173 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
         })
     }
 
+    pub fn get_distinct_providers(&self) -> Result<Vec<String>, AppError> {
+        self.with_conn(|db| {
+            let mut stmt = db.prepare("SELECT DISTINCT provider FROM requestDetails WHERE provider IS NOT NULL AND provider != '' UNION SELECT DISTINCT provider FROM usageHistory WHERE provider IS NOT NULL AND provider != ''")?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
+    }
+
+    pub fn get_recent_usage_logs(&self, limit: usize) -> Result<Vec<Value>, AppError> {
+        self.with_conn(|db| {
+            let mut stmt = db.prepare("SELECT id, timestamp, provider, model, connectionId, endpoint, promptTokens, completionTokens, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?1")?;
+            let rows = stmt.query_map(params![limit as i64], |r| {
+                let id: i64 = r.get(0)?;
+                let ts: String = r.get(1)?;
+                let provider: Option<String> = r.get(2)?;
+                let model: Option<String> = r.get(3)?;
+                let conn: Option<String> = r.get(4)?;
+                let endpoint: Option<String> = r.get(5)?;
+                let prompt: i64 = r.get::<_, Option<i64>>(6)?.unwrap_or(0);
+                let completion: i64 = r.get::<_, Option<i64>>(7)?.unwrap_or(0);
+                let cost: f64 = r.get::<_, Option<f64>>(8)?.unwrap_or(0.0);
+                let status: Option<String> = r.get(9)?;
+                let tokens_s: Option<String> = r.get(10)?;
+                let tokens: Value = tokens_s.as_deref().and_then(|x| serde_json::from_str(x).ok()).unwrap_or_else(|| json!({"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}));
+
+                Ok(json!({
+                    "id": id,
+                    "timestamp": ts,
+                    "provider": provider.unwrap_or_default(),
+                    "model": model.unwrap_or_default(),
+                    "connectionId": conn.unwrap_or_default(),
+                    "endpoint": endpoint.unwrap_or_default(),
+                    "promptTokens": prompt,
+                    "completionTokens": completion,
+                    "cost": cost,
+                    "status": status.unwrap_or_else(|| "ok".into()),
+                    "tokens": tokens
+                }))
+            })?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })
+    }
+
+    pub fn get_request_details_filtered(
+        &self,
+        page: usize,
+        page_size: usize,
+        provider: Option<&str>,
+        model: Option<&str>,
+        connection_id: Option<&str>,
+        status: Option<&str>,
+        start_date: Option<&str>,
+        end_date: Option<&str>,
+    ) -> Result<Value, AppError> {
+        self.with_conn(|db| {
+            let mut conds: Vec<String> = Vec::new();
+            let mut sql_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+            if let Some(p) = provider {
+                conds.push(format!("provider = ?{}", sql_params.len() + 1));
+                sql_params.push(Box::new(p.to_string()));
+            }
+            if let Some(m) = model {
+                conds.push(format!("model = ?{}", sql_params.len() + 1));
+                sql_params.push(Box::new(m.to_string()));
+            }
+            if let Some(c) = connection_id {
+                conds.push(format!("connectionId = ?{}", sql_params.len() + 1));
+                sql_params.push(Box::new(c.to_string()));
+            }
+            if let Some(s) = status {
+                conds.push(format!("status = ?{}", sql_params.len() + 1));
+                sql_params.push(Box::new(s.to_string()));
+            }
+            if let Some(sd) = start_date {
+                conds.push(format!("timestamp >= ?{}", sql_params.len() + 1));
+                sql_params.push(Box::new(sd.to_string()));
+            }
+            if let Some(ed) = end_date {
+                conds.push(format!("timestamp <= ?{}", sql_params.len() + 1));
+                sql_params.push(Box::new(ed.to_string()));
+            }
+
+            let where_clause = if conds.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE {}", conds.join(" AND "))
+            };
+
+            let count_sql = format!("SELECT COUNT(*) FROM requestDetails {}", where_clause);
+            let total: i64 = {
+                let mut stmt = db.prepare(&count_sql)?;
+                let refs: Vec<&dyn rusqlite::ToSql> = sql_params.iter().map(|b| b.as_ref()).collect();
+                stmt.query_row(refs.as_slice(), |r| r.get(0))?
+            };
+
+            let offset = (page.saturating_sub(1)) * page_size;
+            let list_sql = format!(
+                "SELECT id, timestamp, provider, model, connectionId, status, data FROM requestDetails {} ORDER BY timestamp DESC LIMIT ?{} OFFSET ?{}",
+                where_clause,
+                sql_params.len() + 1,
+                sql_params.len() + 2
+            );
+
+            let mut query_params = sql_params;
+            query_params.push(Box::new(page_size as i64));
+            query_params.push(Box::new(offset as i64));
+
+            let refs: Vec<&dyn rusqlite::ToSql> = query_params.iter().map(|b| b.as_ref()).collect();
+            let mut stmt = db.prepare(&list_sql)?;
+            let rows = stmt.query_map(refs.as_slice(), |r| {
+                let id: String = r.get(0)?;
+                let ts: String = r.get(1)?;
+                let p: Option<String> = r.get(2)?;
+                let m: Option<String> = r.get(3)?;
+                let c: Option<String> = r.get(4)?;
+                let s: Option<String> = r.get(5)?;
+                let data_s: String = r.get(6)?;
+                let mut parsed: Value = serde_json::from_str(&data_s).unwrap_or(json!({}));
+                if let Some(obj) = parsed.as_object_mut() {
+                    obj.insert("id".into(), json!(id));
+                    obj.insert("timestamp".into(), json!(ts));
+                    obj.insert("provider".into(), json!(p));
+                    obj.insert("model".into(), json!(m));
+                    obj.insert("connectionId".into(), json!(c));
+                    obj.insert("status".into(), json!(s));
+                    for key in ["request", "providerRequest", "providerResponse", "response"] {
+                        if obj.contains_key(key) {
+                            obj.insert(key.into(), json!({"redacted": true}));
+                        }
+                    }
+                }
+                Ok(parsed)
+            })?;
+
+            let mut details = Vec::new();
+            for r in rows {
+                details.push(r?);
+            }
+
+            Ok(json!({
+                "page": page,
+                "pageSize": page_size,
+                "total": total,
+                "totalPages": ((total as f64) / (page_size as f64)).ceil() as i64,
+                "details": details
+            }))
+        })
+    }
+
+    pub fn get_chart_data(&self, period: &str) -> Result<Value, AppError> {
+        let stats = self.usage_stats(period)?;
+        Ok(json!({
+            "period": period,
+            "stats": stats,
+            "chart": stats.get("last10Minutes").cloned().unwrap_or(json!([]))
+        }))
+    }
+
     pub fn kv_get(&self, scope: &str, key: &str) -> Result<Option<Value>, AppError> {
         self.with_conn(|db| {
             let s: Option<String> = db
@@ -590,6 +757,49 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
                 params![scope, key],
             )? > 0)
         })
+    }
+
+    pub fn get_disabled_models(&self) -> Result<serde_json::Map<String, Value>, AppError> {
+        self.kv_all("disabledModels")
+    }
+
+    pub fn disable_models(&self, provider_alias: &str, ids: &[String]) -> Result<(), AppError> {
+        if provider_alias.is_empty() || ids.is_empty() {
+            return Ok(());
+        }
+        let current_val = self.kv_get("disabledModels", provider_alias)?;
+        let mut list: Vec<String> = match current_val {
+            Some(Value::Array(arr)) => arr.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+            _ => Vec::new(),
+        };
+        for id in ids {
+            if !list.contains(id) {
+                list.push(id.clone());
+            }
+        }
+        self.kv_set("disabledModels", provider_alias, &json!(list))
+    }
+
+    pub fn enable_models(&self, provider_alias: &str, ids: &[String]) -> Result<(), AppError> {
+        if provider_alias.is_empty() {
+            return Ok(());
+        }
+        if ids.is_empty() {
+            self.kv_delete("disabledModels", provider_alias)?;
+            return Ok(());
+        }
+        let current_val = self.kv_get("disabledModels", provider_alias)?;
+        let mut list: Vec<String> = match current_val {
+            Some(Value::Array(arr)) => arr.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+            _ => Vec::new(),
+        };
+        list.retain(|item| !ids.contains(item));
+        if list.is_empty() {
+            self.kv_delete("disabledModels", provider_alias)?;
+        } else {
+            self.kv_set("disabledModels", provider_alias, &json!(list))?;
+        }
+        Ok(())
     }
     pub fn delete_combo(&self, id_or_name: &str) -> Result<bool, AppError> {
         self.with_conn(|db| {

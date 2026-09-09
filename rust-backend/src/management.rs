@@ -65,6 +65,65 @@ pub async fn handle(
         state.db.kv_delete("customModels", &key)?;
         return json_response(StatusCode::OK, json!({"success":true}));
     }
+    if path == "/api/models/disabled" {
+        let (_, b) = req.into_parts();
+        let raw = to_bytes(b, MAX_BODY)
+            .await
+            .map_err(|e| AppError::BadRequest(e.to_string()))?;
+        let body: Value = if !raw.is_empty() {
+            serde_json::from_slice(&raw).unwrap_or(json!({}))
+        } else {
+            json!({})
+        };
+        return crate::models_mgmt::handle_models_disabled(&state, &method, uri.query(), &body);
+    }
+    if path == "/api/usage/chart" {
+        return crate::usage_mgmt::handle_usage_chart(&state, &method, uri.query());
+    }
+    if path == "/api/usage/providers" {
+        return crate::usage_mgmt::handle_usage_providers(&state, &method);
+    }
+    if path == "/api/usage/request-details" {
+        return crate::usage_mgmt::handle_usage_request_details(&state, &method, uri.query());
+    }
+    if path == "/api/usage/logs" || path == "/api/usage/request-logs" {
+        return crate::usage_mgmt::handle_usage_logs(&state, &method);
+    }
+    if path == "/api/usage/stream" {
+        return crate::usage_mgmt::handle_usage_stream(&state, &method);
+    }
+    if path == "/api/translator/load" {
+        return crate::usage_mgmt::handle_translator_load(&method, uri.query());
+    }
+    if path == "/api/translator/console-logs" {
+        return crate::usage_mgmt::handle_translator_console_logs(&method);
+    }
+    if path == "/api/translator/console-logs/stream" {
+        return crate::usage_mgmt::handle_translator_console_stream(&method);
+    }
+    if let Some(conn_id) = path.strip_prefix("/api/usage/") {
+        if let Some(sub) = conn_id.strip_suffix("/codex-reset-credits") {
+            return crate::usage_mgmt::handle_usage_codex_reset(&state, &method, sub);
+        } else if !conn_id.contains('/') {
+            return crate::usage_mgmt::handle_usage_connection(&state, &method, conn_id);
+        }
+    }
+    if path.starts_with("/api/media-providers/tts/") {
+        let sub = path.strip_prefix("/api/media-providers/tts/").unwrap_or("");
+        return crate::inference_media::handle_media_voices(&state, &method, sub).await;
+    }
+    if path == "/api/v1/audio/voices" {
+        return crate::inference_media::handle_v1_audio_voices(&state, &method).await;
+    }
+    if path == "/api/v1/models/info" {
+        return crate::inference_media::handle_v1_models_info(&state, &method, uri.query()).await;
+    }
+    if path.starts_with("/api/v1beta/models") {
+        return crate::inference_media::handle_v1beta_models(&state, &method, &path).await;
+    }
+    if path == "/api/providers/client" {
+        return crate::providers_oauth::handle_providers_client(&state, &method).await;
+    }
     let (_, b) = req.into_parts();
     let raw = to_bytes(b, MAX_BODY)
         .await
@@ -177,9 +236,26 @@ async fn dispatch(
             json!({"models":state.db.kv_all("customModels")?.into_values().collect::<Vec<_>>()}),
         ),
         ("POST", "/api/models/custom") => custom_model_post(state, body),
+        ("POST", "/api/locale") => crate::models_mgmt::handle_locale(method, &body),
+        ("GET", "/api/models/availability") | ("POST", "/api/models/availability") => {
+            crate::models_mgmt::handle_models_availability(state, method, &body)
+        }
+        ("GET", "/api/models/catalog-sync") | ("POST", "/api/models/catalog-sync") => {
+            crate::models_mgmt::handle_models_catalog_sync(state, method)
+        }
+        ("POST", "/api/models/test") => {
+            crate::models_mgmt::handle_models_test(state, method, &body).await
+        }
+        ("POST", "/api/translator/save") => crate::usage_mgmt::handle_translator_save(method, &body),
+        ("POST", "/api/translator/send") => {
+            crate::usage_mgmt::handle_translator_send(state, method, &body).await
+        }
+        ("POST", "/api/settings/proxy-test") => {
+            crate::usage_mgmt::handle_settings_proxy_test(state, method, &body).await
+        }
         ("GET", "/api/pricing") => pricing_get(state),
         ("POST", "/api/translator/translate") => translator_translate(state, body),
-        _ => dynamic(state, method, path, body),
+        _ => dynamic(state, method, path, body).await,
     }
 }
 
@@ -842,7 +918,7 @@ fn pricing_get(state: &AppState) -> Result<Response<Body>, AppError> {
     let p = state.db.kv_all("pricing")?;
     json_response(StatusCode::OK, json!({"pricing":p}))
 }
-fn dynamic(
+async fn dynamic(
     state: &AppState,
     method: &Method,
     path: &str,
@@ -1011,6 +1087,59 @@ fn dynamic(
                 json!({"success":state.db.kv_delete("modelAliases",alias)?}),
             );
         }
+    }
+    if path.starts_with("/api/cli-tools/") {
+        return crate::remaining_infra::handle_cli_tools(state, method, path, &body).await;
+    }
+    if path.starts_with("/api/auth/oidc/") || path.starts_with("/api/auth/saml/") {
+        return crate::remaining_infra::handle_oidc_saml(state, method, path, &body).await;
+    }
+    if path.starts_with("/api/headroom")
+        || path.starts_with("/api/pxpipe")
+        || path.starts_with("/api/tunnel")
+        || path.starts_with("/api/proxy-pools/") && path.contains("-deploy")
+        || path.starts_with("/api/mcp/")
+        || path.starts_with("/api/shutdown")
+        || path.starts_with("/api/version/")
+    {
+        return crate::remaining_infra::handle_infra_lifecycle(state, method, path, &body).await;
+    }
+    if path.starts_with("/api/oauth/") {
+        return crate::providers_oauth::handle_oauth(state, method, path, &body).await;
+    }
+    if path.starts_with("/api/providers/") {
+        let sub = path.strip_prefix("/api/providers/").unwrap_or("");
+        if sub.ends_with("/models") {
+            let pid = sub.trim_end_matches("/models");
+            return crate::providers_oauth::handle_providers_models(state, method, pid).await;
+        }
+        if sub.ends_with("/test") || sub.ends_with("/test-models") || sub == "test-batch" || sub == "validate" || sub == "suggested-models" || sub == "kilo/free-models" {
+            return crate::providers_oauth::handle_providers_test(state, method, &body).await;
+        }
+    }
+    if path.starts_with("/api/provider-nodes/validate") || path.starts_with("/api/proxy-pools/") && path.ends_with("/test") {
+        return crate::providers_oauth::handle_providers_test(state, method, &body).await;
+    }
+    if path == "/api/v1/messages/count_tokens" {
+        return crate::inference_media::handle_count_tokens(state, method, &body).await;
+    }
+    if path == "/api/v1/search" {
+        return crate::inference_media::handle_v1_search(state, method, &body).await;
+    }
+    if path == "/api/v1/web/fetch" {
+        return crate::inference_media::handle_v1_web_fetch(state, method, &body).await;
+    }
+    if path.starts_with("/api/v1/videos") {
+        return crate::inference_media::handle_v1_videos(state, method, path, &body).await;
+    }
+    if path == "/api/v1/responses/compact" {
+        return crate::inference_media::handle_v1_responses_compact(state, method, &body).await;
+    }
+    if path == "/api/v1/api/chat" || path == "/api/v1/route.js" || path == "/api/v1" {
+        return crate::inference_media::handle_v1_api_chat(state, method, &body).await;
+    }
+    if path.starts_with("/api/v1/models/") {
+        return crate::inference_media::handle_v1_models_info(state, method, None).await;
     }
     Err(AppError::NotFound(format!(
         "Rust API route not implemented: {method} {path}"
