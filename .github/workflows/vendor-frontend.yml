@@ -51,7 +51,6 @@ jobs:
             --exclude=docs \
             --exclude=skills \
             /tmp/9router-upstream/ frontend/
-          rm -rf frontend/src/app/api
           printf '%s\n' 'eb712ca821f0ba6bc41043fbd14494c5af5daba5' > frontend/.upstream-commit
       - name: Convert Next application to UI-only mode
         shell: bash
@@ -59,8 +58,22 @@ jobs:
           cat > frontend/src/proxy.js <<'EOF'
           import { NextResponse } from "next/server";
 
+          const RUST_BACKEND_PREFIXES = ["/api", "/v1", "/v1beta", "/responses", "/codex"];
+
+          function isBackendPath(pathname) {
+            return RUST_BACKEND_PREFIXES.some(
+              (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+            );
+          }
+
           export default async function proxy(request) {
             if (process.env.NINEROUTER_UI_ONLY === "1") {
+              if (isBackendPath(request.nextUrl.pathname)) {
+                return NextResponse.json(
+                  { error: "Rust backend only", code: "RUST_BACKEND_REQUIRED" },
+                  { status: 421, headers: { "Cache-Control": "no-store" } },
+                );
+              }
               return NextResponse.next();
             }
             const { proxy: dashboardProxy } = await import("./dashboardGuard");
@@ -75,6 +88,17 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import json
+
+          layout = Path('frontend/src/app/layout.js')
+          lines = layout.read_text().splitlines()
+          blocked = (
+              '@/lib/network/initOutboundProxy',
+              '@/shared/services/bootstrap',
+              '@/lib/consoleLogBuffer',
+              'initConsoleLogCapture();',
+          )
+          lines = [line for line in lines if not any(token in line for token in blocked)]
+          layout.write_text('\n'.join(lines) + '\n')
 
           instrumentation = Path('frontend/src/instrumentation.js')
           text = instrumentation.read_text()
@@ -106,14 +130,16 @@ jobs:
         env:
           NINEROUTER_UI_ONLY: '1'
           NEXT_TELEMETRY_DISABLED: '1'
-      - name: Prove no Next API routes remain
+      - name: Prove frontend is UI-only and production-buildable
         shell: bash
         run: |
-          test ! -d frontend/src/app/api
           test -f frontend/.next/BUILD_ID
           test -f frontend/package-lock.json
-          grep -q 'NINEROUTER_UI_ONLY' frontend/src/proxy.js
+          grep -q 'RUST_BACKEND_REQUIRED' frontend/src/proxy.js
           grep -q 'NINEROUTER_UI_ONLY' frontend/src/instrumentation.js
+          ! grep -q '@/lib/network/initOutboundProxy' frontend/src/app/layout.js
+          ! grep -q '@/shared/services/bootstrap' frontend/src/app/layout.js
+          ! grep -q 'initConsoleLogCapture' frontend/src/app/layout.js
       - name: Remove build products and commit verified source
         shell: bash
         run: |
