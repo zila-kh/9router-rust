@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Repair HEAD-only health probe and improve failure diagnostics
+      - name: Repair HEAD-only health probe
         shell: python
         run: |
           from pathlib import Path
@@ -27,27 +27,7 @@ jobs:
           new = "          curl -fsS -D \"$TMP/health-headers.txt\" -o /dev/null http://127.0.0.1:20128/api/health\n          tr -d '\\r' <\"$TMP/health-headers.txt\" | grep -qi '^x-9router-runtime: rust$'"
           if old not in text:
               raise SystemExit('health probe pattern not found')
-          text = text.replace(old, new, 1)
-
-          old_cleanup = '''          cleanup(){
-            jobs -p | xargs -r kill 2>/dev/null || true
-            if [[ ${KEEP_E2E_TMP:-0} == 1 ]]; then echo "E2E logs: $TMP"; else rm -rf "$TMP"; fi
-          }'''
-          new_cleanup = '''          cleanup(){
-            status=$?
-            set +e
-            if (( status != 0 )); then
-              echo '=== Rust log ==='; cat "$RUST_LOG" 2>/dev/null || true
-              echo '=== UI log ==='; cat "$UI_LOG" 2>/dev/null || true
-              echo '=== Mock log ==='; cat "$MOCK_LOG" 2>/dev/null || true
-            fi
-            jobs -p | xargs -r kill 2>/dev/null || true
-            if [[ ${KEEP_E2E_TMP:-0} == 1 ]]; then echo "E2E logs: $TMP"; else rm -rf "$TMP"; fi
-            return "$status"
-          }'''
-          if old_cleanup not in text:
-              raise SystemExit('cleanup pattern not found')
-          path.write_text(text.replace(old_cleanup, new_cleanup, 1))
+          path.write_text(text.replace(old, new, 1))
       - name: Commit fix
         shell: bash
         run: |
