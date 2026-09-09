@@ -90,22 +90,22 @@ fn claude_to_openai_request(mut b: Value) -> Result<Value, AppError> {
         .ok_or_else(|| AppError::BadRequest("Claude request must be object".into()))?;
     let mut out = Map::new();
     if let Some(v) = o.remove("model") {
-        out.insert("model".into(), v)
+        out.insert("model".into(), v);
     }
     if let Some(v) = o.remove("max_tokens") {
-        out.insert("max_tokens".into(), v)
+        out.insert("max_tokens".into(), v);
     }
     if let Some(v) = o.remove("temperature") {
-        out.insert("temperature".into(), v)
+        out.insert("temperature".into(), v);
     }
     if let Some(v) = o.remove("top_p") {
-        out.insert("top_p".into(), v)
+        out.insert("top_p".into(), v);
     }
     if let Some(v) = o.remove("stop_sequences") {
-        out.insert("stop".into(), v)
+        out.insert("stop".into(), v);
     }
     if let Some(v) = o.remove("stream") {
-        out.insert("stream".into(), v)
+        out.insert("stream".into(), v);
     }
     let mut messages = Vec::new();
     if let Some(system) = o.remove("system") {
@@ -159,7 +159,7 @@ fn claude_to_openai_request(mut b: Value) -> Result<Value, AppError> {
     out.insert("messages".into(), Value::Array(messages));
     if let Some(tools) = o.remove("tools") {
         let arr=tools.as_array().cloned().unwrap_or_default().into_iter().map(|t|json!({"type":"function","function":{"name":t.get("name").cloned().unwrap_or(json!("")),"description":t.get("description").cloned().unwrap_or(json!("")),"parameters":t.get("input_schema").cloned().unwrap_or(json!({"type":"object"}))}})).collect();
-        out.insert("tools".into(), Value::Array(arr))
+        out.insert("tools".into(), Value::Array(arr));
     }
     if let Some(tc) = o.remove("tool_choice") {
         let v = match tc.get("type").and_then(Value::as_str) {
@@ -170,7 +170,7 @@ fn claude_to_openai_request(mut b: Value) -> Result<Value, AppError> {
             }
             _ => tc,
         };
-        out.insert("tool_choice".into(), v)
+        out.insert("tool_choice".into(), v);
     }
     for (k, v) in o.iter() {
         if !out.contains_key(k) {

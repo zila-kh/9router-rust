@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use chrono::{TimeZone, Utc};
+use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use std::{

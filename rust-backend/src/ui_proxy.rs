@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use axum::{
     body::{to_bytes, Body},
     extract::ConnectInfo,
-    http::{header, HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
 };
 use futures_util::StreamExt;
 
@@ -67,11 +67,11 @@ async fn proxy(
             reqwest::header::HeaderName::from_bytes(k.as_str().as_bytes()),
             reqwest::header::HeaderValue::from_bytes(v.as_bytes()),
         ) {
-            h.append(n, v)
+            h.append(n, v);
         }
     }
     if let Ok(v) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
-        h.insert(reqwest::header::HeaderName::from_static("x-9r-real-ip"), v)
+        h.insert(reqwest::header::HeaderName::from_static("x-9r-real-ip"), v);
     }
     h.insert(
         reqwest::header::HeaderName::from_static("x-9r-ui-proxy"),
@@ -113,7 +113,7 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
             HeaderName::from_bytes(k.as_str().as_bytes()),
             HeaderValue::from_bytes(v.as_bytes()),
         ) {
-            dst.append(k, v)
+            dst.append(k, v);
         }
     }
 }

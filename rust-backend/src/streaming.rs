@@ -166,7 +166,8 @@ fn reduce_claude(bytes: &[u8], model: &str) -> Result<Value, AppError> {
                         let old = content[idx]
                             .get("text")
                             .and_then(Value::as_str)
-                            .unwrap_or("");
+                            .unwrap_or("")
+                            .to_owned();
                         content[idx]["type"] = json!("text");
                         content[idx]["text"] = json!(format!("{old}{s}"))
                     }
@@ -175,7 +176,8 @@ fn reduce_claude(bytes: &[u8], model: &str) -> Result<Value, AppError> {
                         let old = content[idx]
                             .get("_partial_json")
                             .and_then(Value::as_str)
-                            .unwrap_or("");
+                            .unwrap_or("")
+                            .to_owned();
                         content[idx]["_partial_json"] = json!(format!("{old}{s}"))
                     }
                     Some("thinking_delta") => {
@@ -183,7 +185,8 @@ fn reduce_claude(bytes: &[u8], model: &str) -> Result<Value, AppError> {
                         let old = content[idx]
                             .get("thinking")
                             .and_then(Value::as_str)
-                            .unwrap_or("");
+                            .unwrap_or("")
+                            .to_owned();
                         content[idx]["type"] = json!("thinking");
                         content[idx]["thinking"] = json!(format!("{old}{s}"))
                     }

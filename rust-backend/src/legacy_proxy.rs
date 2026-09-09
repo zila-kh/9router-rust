@@ -79,7 +79,7 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
             HeaderName::from_bytes(k.as_str().as_bytes()),
             HeaderValue::from_bytes(v.as_bytes()),
         ) {
-            dst.append(k, v)
+            dst.append(k, v);
         }
     }
 }
