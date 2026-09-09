@@ -1,0 +1,285 @@
+name: Integrate and verify strict Rust monorepo
+
+on:
+  push:
+    paths:
+      - .github/workflows/integrate-monorepo.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Normalize monorepo layout and scripts
+        shell: bash
+        run: |
+          rm -rf frontend/rust-backend
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/vendor-frontend.yml')
+          text = workflow.read_text()
+          needle = '            --exclude=skills \\\n            /tmp/9router-upstream/ frontend/'
+          replacement = '            --exclude=skills \\\n            --exclude=rust-backend \\\n            /tmp/9router-upstream/ frontend/'
+          if needle in text:
+              workflow.write_text(text.replace(needle, replacement, 1))
+          elif '--exclude=rust-backend' not in text:
+              raise SystemExit('vendor workflow rsync block changed unexpectedly')
+
+          audit = Path('scripts/audit-parity.mjs')
+          text = audit.read_text().replace(
+              "const apiRoot=path.join(root,'src/app/api');",
+              "const apiRoot=path.join(root,'frontend/src/app/api');",
+          )
+          audit.write_text(text)
+          PY
+
+          cat > scripts/run-dev.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT=${1:-.}
+          cd "$ROOT"
+          command -v cargo >/dev/null || { echo 'error: cargo not found' >&2; exit 127; }
+          command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
+          export NINEROUTER_UI_ONLY=1
+          export NINEROUTER_UI_ORIGIN=${NINEROUTER_UI_ORIGIN:-http://127.0.0.1:20129}
+          export NINEROUTER_HOST=${NINEROUTER_HOST:-127.0.0.1}
+          export PORT=${PORT:-20128}
+          cleanup(){ jobs -p | xargs -r kill 2>/dev/null || true; }
+          trap cleanup EXIT INT TERM
+          test -d frontend/node_modules || npm --prefix frontend ci
+          NINEROUTER_UI_ONLY=1 npm --prefix frontend run dev:ui &
+          cargo run --manifest-path rust-backend/Cargo.toml
+          EOF
+
+          cat > scripts/run-prod.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT=${1:-.}
+          cd "$ROOT"
+          command -v cargo >/dev/null || { echo 'error: cargo not found' >&2; exit 127; }
+          command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
+          export NINEROUTER_UI_ONLY=1
+          export NINEROUTER_UI_ORIGIN=${NINEROUTER_UI_ORIGIN:-http://127.0.0.1:20129}
+          export NINEROUTER_HOST=${NINEROUTER_HOST:-127.0.0.1}
+          export PORT=${PORT:-20128}
+          cleanup(){ jobs -p | xargs -r kill 2>/dev/null || true; }
+          trap cleanup EXIT INT TERM
+          npm --prefix frontend ci
+          NINEROUTER_UI_ONLY=1 npm --prefix frontend run build
+          cargo build --release --locked --manifest-path rust-backend/Cargo.toml
+          NINEROUTER_UI_ONLY=1 npm --prefix frontend run start:ui &
+          exec rust-backend/target/release/nine-router-rs
+          EOF
+
+          cat > scripts/test-port.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT=${1:-.}
+          cd "$ROOT"
+          command -v cargo >/dev/null || { echo 'error: cargo not found' >&2; exit 127; }
+          command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
+          command -v node >/dev/null || { echo 'error: node not found' >&2; exit 127; }
+          python3 ./scripts/static-audit.py
+          cargo fmt --manifest-path rust-backend/Cargo.toml --all -- --check
+          cargo check --locked --all-targets --manifest-path rust-backend/Cargo.toml
+          cargo test --locked --all-targets --manifest-path rust-backend/Cargo.toml
+          npm --prefix frontend ci
+          NINEROUTER_UI_ONLY=1 npm --prefix frontend run build
+          NINEROUTER_ALLOW_PARITY_GAPS=1 node ./scripts/audit-parity.mjs
+          EOF
+
+          cat > scripts/smoke-e2e.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT=${1:-.}
+          cd "$ROOT"
+          TMP=$(mktemp -d)
+          COOKIE="$TMP/cookie.txt"
+          UI_LOG="$TMP/ui.log"
+          RUST_LOG="$TMP/rust.log"
+          MOCK_LOG="$TMP/mock.log"
+          cleanup(){
+            jobs -p | xargs -r kill 2>/dev/null || true
+            if [[ ${KEEP_E2E_TMP:-0} == 1 ]]; then echo "E2E logs: $TMP"; else rm -rf "$TMP"; fi
+          }
+          trap cleanup EXIT INT TERM
+
+          python3 - <<'PY' >"$MOCK_LOG" 2>&1 &
+          import json
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              protocol_version = 'HTTP/1.1'
+              def log_message(self, fmt, *args):
+                  print(fmt % args, flush=True)
+              def do_POST(self):
+                  length = int(self.headers.get('content-length', '0'))
+                  body = json.loads(self.rfile.read(length) or b'{}')
+                  assert self.path == '/v1/chat/completions', self.path
+                  model = body.get('model', 'mock-model')
+                  if body.get('stream'):
+                      parts = [
+                          {'id':'chatcmpl-mock','object':'chat.completion.chunk','created':1,'model':model,'choices':[{'index':0,'delta':{'role':'assistant','content':'hello '},'finish_reason':None}]},
+                          {'id':'chatcmpl-mock','object':'chat.completion.chunk','created':1,'model':model,'choices':[{'index':0,'delta':{'content':'from mock'},'finish_reason':None}]},
+                          {'id':'chatcmpl-mock','object':'chat.completion.chunk','created':1,'model':model,'choices':[{'index':0,'delta':{},'finish_reason':'stop'}],'usage':{'prompt_tokens':3,'completion_tokens':3,'total_tokens':6}},
+                      ]
+                      payload = ''.join(f'data: {json.dumps(p)}\n\n' for p in parts) + 'data: [DONE]\n\n'
+                      data = payload.encode()
+                      self.send_response(200)
+                      self.send_header('content-type', 'text/event-stream')
+                      self.send_header('cache-control', 'no-cache')
+                      self.send_header('content-length', str(len(data)))
+                      self.end_headers()
+                      self.wfile.write(data)
+                  else:
+                      payload = json.dumps({
+                          'id':'chatcmpl-mock','object':'chat.completion','created':1,'model':model,
+                          'choices':[{'index':0,'message':{'role':'assistant','content':'hello from mock'},'finish_reason':'stop'}],
+                          'usage':{'prompt_tokens':3,'completion_tokens':3,'total_tokens':6},
+                      }).encode()
+                      self.send_response(200)
+                      self.send_header('content-type', 'application/json')
+                      self.send_header('content-length', str(len(payload)))
+                      self.end_headers()
+                      self.wfile.write(payload)
+
+          ThreadingHTTPServer(('127.0.0.1', 18080), Handler).serve_forever()
+          PY
+
+          NINEROUTER_UI_ONLY=1 npm --prefix frontend run start:ui >"$UI_LOG" 2>&1 &
+          NINEROUTER_HOST=127.0.0.1 \
+          PORT=20128 \
+          NINEROUTER_UI_ORIGIN=http://127.0.0.1:20129 \
+          NINEROUTER_DATA_DIR="$TMP/data" \
+          NINEROUTER_DB_PATH="$TMP/data/db/data.sqlite" \
+          rust-backend/target/debug/nine-router-rs >"$RUST_LOG" 2>&1 &
+
+          for _ in {1..120}; do
+            curl -fsS http://127.0.0.1:20128/api/health >/dev/null 2>&1 && break
+            sleep 0.25
+          done
+          curl -fsS http://127.0.0.1:20128/api/health >"$TMP/health.json"
+          grep -q '"runtime":"rust"' "$TMP/health.json"
+          curl -fsSI http://127.0.0.1:20128/api/health | tr -d '\r' | grep -qi '^x-9router-runtime: rust$'
+
+          PRIVATE_CODE=$(curl -sS -o "$TMP/private-api.json" -w '%{http_code}' http://127.0.0.1:20129/api/health)
+          test "$PRIVATE_CODE" = 421
+          grep -q 'RUST_BACKEND_REQUIRED' "$TMP/private-api.json"
+
+          curl -fsS -c "$COOKIE" -H 'content-type: application/json' \
+            -d '{"password":"123456"}' http://127.0.0.1:20128/api/auth/login >"$TMP/login.json"
+          grep -q '"success":true' "$TMP/login.json"
+          curl -fsS -L -b "$COOKIE" http://127.0.0.1:20128/dashboard >"$TMP/dashboard.html"
+          grep -qi '<html' "$TMP/dashboard.html"
+          curl -fsS -b "$COOKIE" http://127.0.0.1:20128/api/settings >"$TMP/settings.json"
+          grep -q '"settings"' "$TMP/settings.json"
+
+          curl -fsS -b "$COOKIE" -H 'content-type: application/json' \
+            -d '{"name":"e2e"}' http://127.0.0.1:20128/api/keys >"$TMP/key.json"
+          API_KEY=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["key"])' "$TMP/key.json")
+          test -n "$API_KEY"
+
+          curl -fsS -b "$COOKIE" -H 'content-type: application/json' \
+            -d '{"name":"E2E mock","prefix":"e2e","apiType":"chat","baseUrl":"http://127.0.0.1:18080/v1","type":"openai-compatible"}' \
+            http://127.0.0.1:20128/api/provider-nodes >"$TMP/node.json"
+          NODE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node"]["id"])' "$TMP/node.json")
+          test -n "$NODE_ID"
+
+          python3 - "$NODE_ID" >"$TMP/connection-body.json" <<'PY'
+          import json, sys
+          print(json.dumps({
+              'provider': sys.argv[1],
+              'name': 'E2E mock account',
+              'apiKey': 'mock-upstream-key',
+              'providerSpecificData': {'baseUrl': 'http://127.0.0.1:18080/v1', 'apiType': 'chat'},
+          }))
+          PY
+          curl -fsS -b "$COOKIE" -H 'content-type: application/json' \
+            --data-binary @"$TMP/connection-body.json" http://127.0.0.1:20128/api/providers >"$TMP/provider.json"
+          grep -q '"connection"' "$TMP/provider.json"
+
+          MODEL="$NODE_ID/mock-model"
+          python3 - "$MODEL" >"$TMP/openai.json" <<'PY'
+          import json, sys
+          print(json.dumps({'model':sys.argv[1], 'messages':[{'role':'user','content':'ping'}], 'stream':False}))
+          PY
+          curl -fsS -H "Authorization: Bearer $API_KEY" -H 'content-type: application/json' \
+            --data-binary @"$TMP/openai.json" http://127.0.0.1:20128/v1/chat/completions >"$TMP/openai-out.json"
+          python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["choices"][0]["message"]["content"]=="hello from mock"' "$TMP/openai-out.json"
+
+          python3 - "$MODEL" >"$TMP/claude.json" <<'PY'
+          import json, sys
+          print(json.dumps({'model':sys.argv[1], 'max_tokens':128, 'messages':[{'role':'user','content':'ping'}], 'stream':False}))
+          PY
+          curl -fsS -H "x-api-key: $API_KEY" -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' \
+            --data-binary @"$TMP/claude.json" http://127.0.0.1:20128/v1/messages >"$TMP/claude-out.json"
+          python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); assert x["type"]=="message" and x["content"][0]["text"]=="hello from mock"' "$TMP/claude-out.json"
+
+          python3 - "$MODEL" >"$TMP/responses.json" <<'PY'
+          import json, sys
+          print(json.dumps({'model':sys.argv[1], 'input':'ping', 'stream':False}))
+          PY
+          curl -fsS -H "Authorization: Bearer $API_KEY" -H 'content-type: application/json' \
+            --data-binary @"$TMP/responses.json" http://127.0.0.1:20128/v1/responses >"$TMP/responses-out.json"
+          python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); assert x["object"]=="response"' "$TMP/responses-out.json"
+
+          python3 - "$MODEL" >"$TMP/stream.json" <<'PY'
+          import json, sys
+          print(json.dumps({'model':sys.argv[1], 'messages':[{'role':'user','content':'ping'}], 'stream':True}))
+          PY
+          curl -fsS -N -H "Authorization: Bearer $API_KEY" -H 'content-type: application/json' \
+            --data-binary @"$TMP/stream.json" http://127.0.0.1:20128/v1/chat/completions >"$TMP/stream-out.txt"
+          grep -q 'hello ' "$TMP/stream-out.txt"
+          grep -q 'from mock' "$TMP/stream-out.txt"
+          grep -q '\[DONE\]' "$TMP/stream-out.txt"
+
+          curl -fsS -H "Authorization: Bearer $API_KEY" http://127.0.0.1:20128/v1/models >"$TMP/models.json"
+          grep -q '"object":"list"' "$TMP/models.json"
+          curl -fsS -b "$COOKIE" 'http://127.0.0.1:20128/api/usage/stats?period=all' >"$TMP/usage.json"
+          python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["totalRequests"] >= 3' "$TMP/usage.json"
+
+          echo 'strict Rust backend + pinned Next frontend smoke test passed'
+          EOF
+
+          chmod +x scripts/run-dev.sh scripts/run-prod.sh scripts/test-port.sh scripts/smoke-e2e.sh
+      - name: Rust format, check, test, and build
+        run: |
+          cargo fmt --manifest-path rust-backend/Cargo.toml --all -- --check
+          cargo check --locked --manifest-path rust-backend/Cargo.toml --all-targets
+          cargo test --locked --manifest-path rust-backend/Cargo.toml --all-targets
+          cargo build --locked --manifest-path rust-backend/Cargo.toml
+      - name: Build pinned frontend
+        run: |
+          npm --prefix frontend ci
+          NINEROUTER_UI_ONLY=1 npm --prefix frontend run build
+      - name: Strict end-to-end smoke test
+        run: ./scripts/smoke-e2e.sh .
+      - name: Commit verified monorepo integration
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/vendor-frontend.yml frontend scripts
+          if git diff --cached --quiet; then
+            echo 'Monorepo integration is already current.'
+            exit 0
+          fi
+          git commit -m 'Integrate and verify strict Rust backend monorepo'
+          git push origin HEAD:main
