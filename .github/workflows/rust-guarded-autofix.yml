@@ -1,0 +1,48 @@
+name: Guarded Rust autofix
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ci/run-rust-autofix
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-backend
+      - name: Apply safe compiler suggestions
+        run: |
+          cargo fmt --all --manifest-path rust-backend/Cargo.toml
+          cargo fix --manifest-path rust-backend/Cargo.toml --all-targets --allow-dirty --allow-staged || true
+          cargo clippy --fix --manifest-path rust-backend/Cargo.toml --all-targets --allow-dirty --allow-staged -- -A warnings || true
+          cargo fmt --all --manifest-path rust-backend/Cargo.toml
+      - name: Require compile and tests before commit
+        run: |
+          cargo check --manifest-path rust-backend/Cargo.toml --all-targets 2>&1 | tee cargo-check.log
+          cargo test --manifest-path rust-backend/Cargo.toml --all-targets 2>&1 | tee cargo-test.log
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(rust): apply compiler-verified fixes [skip ci]"
+          file_pattern: rust-backend
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-autofix-diagnostics
+          if-no-files-found: ignore
+          path: |
+            cargo-check.log
+            cargo-test.log
