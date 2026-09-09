@@ -125,8 +125,6 @@ jobs:
           data['scripts']['start:ui'] = 'next start --hostname 127.0.0.1 --port 20129'
           package.write_text(json.dumps(data, indent=2) + '\n')
 
-          # Upstream contains public installed-app OAuth credentials. Keep tracked
-          # source secret-free and resolve these through the Rust runtime instead.
           client_id = re.compile(r'\b[0-9]{8,}-[A-Za-z0-9._-]+\.apps\.googleusercontent\.com\b')
           client_secret = re.compile(r'\bGOCSPX-[A-Za-z0-9_-]+\b')
           roots = [Path('frontend'), Path('rust-backend/assets/provider-catalog.json')]
@@ -166,5 +164,10 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add frontend rust-backend/assets/provider-catalog.json
+          git add -f frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo 'Vendored frontend and catalog are already current.'
+            exit 0
+          fi
           git commit -m 'Vendor verified pinned frontend and generated Rust catalog'
           git push origin HEAD:main
