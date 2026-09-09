@@ -2,10 +2,39 @@ use crate::{error::AppError, state::AppState};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
-static CATALOG: Lazy<Value> = Lazy::new(|| {
-    serde_json::from_str(include_str!("../assets/provider-catalog.json"))
-        .unwrap_or_else(|_| json!({"registry":[],"providers":{},"models":{},"oauth":{},"media":{}}))
-});
+fn resolve_env_placeholders_with<F>(value: &mut Value, lookup: &F)
+where
+    F: Fn(&str) -> Option<String>,
+{
+    match value {
+        Value::String(text) => {
+            if let Some(name) = text.strip_prefix("env:") {
+                let replacement = lookup(name).unwrap_or_default();
+                *text = replacement;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                resolve_env_placeholders_with(item, lookup);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                resolve_env_placeholders_with(item, lookup);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn load_catalog() -> Value {
+    let mut catalog: Value = serde_json::from_str(include_str!("../assets/provider-catalog.json"))
+        .unwrap_or_else(|_| json!({"registry":[],"providers":{},"models":{},"oauth":{},"media":{}}));
+    resolve_env_placeholders_with(&mut catalog, &|name| std::env::var(name).ok());
+    catalog
+}
+
+static CATALOG: Lazy<Value> = Lazy::new(load_catalog);
 
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
@@ -225,7 +254,8 @@ pub fn auth_header(connection: &Value, t: &Value) -> Option<(String, String)> {
     let access = connection.get("accessToken").and_then(Value::as_str);
     let format = t.get("format").and_then(Value::as_str).unwrap_or("openai");
     let spec = if let Some(a) = auth {
-        if a.get("combined").and_then(Value::as_bool).unwrap_or(false) || a.get("header").is_some()
+        if a.get("combined").and_then(Value::as_bool).unwrap_or(false)
+            || a.get("header").is_some()
         {
             Some(a)
         } else if api.is_some() {
@@ -322,4 +352,35 @@ pub fn endpoint(
         }
     }
     Ok((url, format))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_env_placeholders_with;
+    use serde_json::json;
+
+    #[test]
+    fn resolves_nested_environment_placeholders() {
+        let mut value = json!({
+            "clientId": "env:CLIENT_ID",
+            "nested": ["keep", {"secret": "env:CLIENT_SECRET"}],
+            "number": 7
+        });
+        resolve_env_placeholders_with(&mut value, &|name| match name {
+            "CLIENT_ID" => Some("client-value".into()),
+            "CLIENT_SECRET" => Some("secret-value".into()),
+            _ => None,
+        });
+        assert_eq!(value["clientId"], "client-value");
+        assert_eq!(value["nested"][0], "keep");
+        assert_eq!(value["nested"][1]["secret"], "secret-value");
+        assert_eq!(value["number"], 7);
+    }
+
+    #[test]
+    fn missing_environment_placeholder_becomes_empty() {
+        let mut value = json!({"token": "env:MISSING_TOKEN"});
+        resolve_env_placeholders_with(&mut value, &|_| None);
+        assert_eq!(value["token"], "");
+    }
 }
