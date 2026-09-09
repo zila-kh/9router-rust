@@ -1,0 +1,1013 @@
+{
+  "upstreamCommit": "eb712ca821f0ba6bc41043fbd14494c5af5daba5",
+  "routes": [
+    {
+      "file": "api/auth/login/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/auth/logout/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/auth/oidc/callback/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/auth/oidc/start/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/auth/oidc/test/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/auth/reset-password/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/auth/saml/acs/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/auth/saml/metadata/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/auth/saml/start/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/auth/saml/test/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/auth/status/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/cli-tools/all-statuses/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/cli-tools/antigravity-mitm/alias/route.js",
+      "methods": [
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/cli-tools/antigravity-mitm/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/claude-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/cline-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/codex-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/copilot-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/cowork-mcp-registry/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/cli-tools/cowork-mcp-tools/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/cowork-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/deepseek-tui-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/devin-settings/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/cli-tools/droid-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/grok-build-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/hermes-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/jcode-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/kilo-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/openclaw-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/cli-tools/opencode-settings/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/combos/[id]/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/combos/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/headroom/extras/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/headroom/proxy/[...path]/route.js",
+      "methods": []
+    },
+    {
+      "file": "api/headroom/restart/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/headroom/start/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/headroom/status/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/headroom/stop/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/health/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/init/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/keys/[id]/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/keys/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/locale/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/mcp/[plugin]/message/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/mcp/[plugin]/sse/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/media-providers/tts/deepgram/voices/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/media-providers/tts/elevenlabs/voices/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/media-providers/tts/inworld/voices/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/media-providers/tts/minimax/voices/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/media-providers/tts/voices/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/models/alias/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/models/availability/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/models/catalog-sync/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/models/custom/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/models/disabled/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/models/route.js",
+      "methods": [
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/models/test/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/[provider]/[action]/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/codex/bulk-import/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/codex/import-token/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/cursor/auto-import/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/oauth/cursor/import/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/gitlab/pat/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/grok-cli/bulk-import/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/iflow/cookie/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/kiro/api-key/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/kiro/auto-import/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/oauth/kiro/import/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/kiro/import-cli-proxy/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/kiro/social-authorize/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/oauth/kiro/social-exchange/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/pricing/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH"
+      ]
+    },
+    {
+      "file": "api/provider-nodes/[id]/route.js",
+      "methods": [
+        "DELETE",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/provider-nodes/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/provider-nodes/validate/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/providers/[id]/models/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/providers/[id]/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/providers/[id]/test/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/providers/[id]/test-models/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/providers/client/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/providers/kilo/free-models/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/providers/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/providers/suggested-models/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/providers/test-batch/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/providers/validate/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/proxy-pools/[id]/route.js",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "file": "api/proxy-pools/[id]/test/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/proxy-pools/cloudflare-deploy/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/proxy-pools/deno-deploy/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/proxy-pools/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/proxy-pools/vercel-deploy/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/pxpipe/health/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/pxpipe/install/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/pxpipe/logs/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/pxpipe/restart/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/pxpipe/start/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/pxpipe/stats/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/pxpipe/status/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/pxpipe/stop/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/settings/database/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/settings/proxy-test/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/settings/require-login/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/settings/route.js",
+      "methods": [
+        "GET",
+        "PATCH"
+      ]
+    },
+    {
+      "file": "api/shutdown/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/tags/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/translator/console-logs/route.js",
+      "methods": [
+        "DELETE",
+        "GET"
+      ]
+    },
+    {
+      "file": "api/translator/console-logs/stream/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/translator/load/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/translator/save/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/translator/send/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/translator/translate/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/tunnel/disable/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/tunnel/enable/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/tunnel/status/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/tunnel/tailscale-check/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/tunnel/tailscale-disable/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/tunnel/tailscale-enable/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/tunnel/tailscale-install/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/usage/[connectionId]/codex-reset-credits/route.js",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/usage/[connectionId]/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/chart/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/history/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/logs/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/providers/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/request-details/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/request-logs/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/stats/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/usage/stream/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/v1/api/chat/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/audio/speech/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/audio/transcriptions/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/audio/voices/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/v1/chat/completions/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/embeddings/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/images/generations/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/messages/count_tokens/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/messages/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/models/[...model]/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/v1/models/info/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/v1/models/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/v1/responses/compact/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/responses/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/route.js",
+      "methods": []
+    },
+    {
+      "file": "api/v1/search/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/videos/[id]/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/v1/videos/edits/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/videos/extensions/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/videos/generations/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1/web/fetch/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1beta/models/[...path]/route.js",
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ]
+    },
+    {
+      "file": "api/v1beta/models/route.js",
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ]
+    },
+    {
+      "file": "api/version/route.js",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "file": "api/version/shutdown/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/version/update/route.js",
+      "methods": [
+        "POST"
+      ]
+    }
+  ]
+}
