@@ -1,0 +1,45 @@
+name: Publish strict status
+
+on:
+  workflow_run:
+    workflows: ["Strict full-stack v2"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Write machine-readable status
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          mkdir -p ci
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          status = {
+              "workflow": "Strict full-stack v2",
+              "conclusion": os.environ["CONCLUSION"],
+              "runId": int(os.environ["RUN_ID"]),
+              "headSha": os.environ["HEAD_SHA"],
+              "runUrl": os.environ["RUN_URL"],
+              "completedAt": datetime.now(timezone.utc).isoformat(),
+              "strictParity": os.environ["CONCLUSION"] == "success",
+          }
+          with open("ci/strict-status.json", "w", encoding="utf-8") as f:
+              json.dump(status, f, indent=2)
+              f.write("\n")
+          PY
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "ci: publish strict full-stack status [skip ci]"
+          file_pattern: ci/strict-status.json
