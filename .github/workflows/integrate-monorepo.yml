@@ -1,5 +1,6 @@
 name: Strict Rust monorepo verification
 
+# This gate verifies the checked-in Rust backend and pinned UI-only frontend together.
 on:
   push:
     branches: [main]
