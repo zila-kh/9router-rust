@@ -27,6 +27,14 @@ jobs:
           git clone --filter=blob:none https://github.com/decolua/9router.git /tmp/9router-upstream
           git -C /tmp/9router-upstream checkout eb712ca821f0ba6bc41043fbd14494c5af5daba5
           test "$(git -C /tmp/9router-upstream rev-parse HEAD)" = "eb712ca821f0ba6bc41043fbd14494c5af5daba5"
+      - name: Export the exact provider catalog for Rust
+        shell: bash
+        run: |
+          mkdir -p /tmp/9router-upstream/rust-backend/assets
+          cp scripts/export-rust-catalog.mjs /tmp/9router-upstream/scripts/export-rust-catalog.mjs
+          (cd /tmp/9router-upstream && node scripts/export-rust-catalog.mjs)
+          cp /tmp/9router-upstream/rust-backend/assets/provider-catalog.json rust-backend/assets/provider-catalog.json
+          node -e 'const c=require("./rust-backend/assets/provider-catalog.json"); if (!Array.isArray(c.registry) || c.registry.length < 50) process.exit(1); console.log(`catalog entries: ${c.registry.length}`)'
       - name: Vendor frontend source
         shell: bash
         run: |
@@ -94,7 +102,7 @@ jobs:
           PY
       - name: Install and build pinned frontend
         working-directory: frontend
-        run: npm ci && npm run build
+        run: npm install --no-audit --no-fund && npm run build
         env:
           NINEROUTER_UI_ONLY: '1'
           NEXT_TELEMETRY_DISABLED: '1'
@@ -103,14 +111,15 @@ jobs:
         run: |
           test ! -d frontend/src/app/api
           test -f frontend/.next/BUILD_ID
+          test -f frontend/package-lock.json
           grep -q 'NINEROUTER_UI_ONLY' frontend/src/proxy.js
           grep -q 'NINEROUTER_UI_ONLY' frontend/src/instrumentation.js
-      - name: Remove build products and commit source
+      - name: Remove build products and commit verified source
         shell: bash
         run: |
           rm -rf frontend/node_modules frontend/.next
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add frontend
-          git commit -m 'Vendor pinned existing 9Router frontend in UI-only mode'
+          git add frontend rust-backend/assets/provider-catalog.json
+          git commit -m 'Vendor verified pinned frontend and generated Rust catalog'
           git push origin HEAD:main
