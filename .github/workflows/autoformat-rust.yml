@@ -1,0 +1,36 @@
+name: Autoformat Rust source
+
+on:
+  push:
+    paths:
+      - .github/workflows/autoformat-rust.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format Rust backend
+        run: cargo fmt --manifest-path rust-backend/Cargo.toml --all
+      - name: Commit formatted source
+        shell: bash
+        run: |
+          if git diff --quiet -- rust-backend; then
+            echo 'Rust source is already formatted.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add rust-backend
+          git commit -m 'Format Rust backend source'
+          git push origin HEAD:main
