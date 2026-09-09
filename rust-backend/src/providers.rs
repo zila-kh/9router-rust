@@ -29,7 +29,9 @@ where
 
 fn load_catalog() -> Value {
     let mut catalog: Value = serde_json::from_str(include_str!("../assets/provider-catalog.json"))
-        .unwrap_or_else(|_| json!({"registry":[],"providers":{},"models":{},"oauth":{},"media":{}}));
+        .unwrap_or_else(
+            |_| json!({"registry":[],"providers":{},"models":{},"oauth":{},"media":{}}),
+        );
     resolve_env_placeholders_with(&mut catalog, &|name| std::env::var(name).ok());
     catalog
 }
@@ -254,8 +256,7 @@ pub fn auth_header(connection: &Value, t: &Value) -> Option<(String, String)> {
     let access = connection.get("accessToken").and_then(Value::as_str);
     let format = t.get("format").and_then(Value::as_str).unwrap_or("openai");
     let spec = if let Some(a) = auth {
-        if a.get("combined").and_then(Value::as_bool).unwrap_or(false)
-            || a.get("header").is_some()
+        if a.get("combined").and_then(Value::as_bool).unwrap_or(false) || a.get("header").is_some()
         {
             Some(a)
         } else if api.is_some() {
