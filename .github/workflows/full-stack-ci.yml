@@ -1,0 +1,107 @@
+name: Full-stack CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-stack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-backend
+      - name: Format
+        run: cargo fmt --manifest-path rust-backend/Cargo.toml --all -- --check
+      - name: Check
+        run: cargo check --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Clippy
+        run: cargo clippy --manifest-path rust-backend/Cargo.toml --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Release build
+        run: cargo build --release --manifest-path rust-backend/Cargo.toml
+
+  pinned-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Materialize pinned frontend
+        run: ./scripts/materialize-frontend.sh frontend
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build existing Next/React UI
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NINEROUTER_UI_ONLY: "1"
+        run: npm run build
+
+  strict-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: [rust-backend, pinned-frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Materialize pinned frontend
+        run: ./scripts/materialize-frontend.sh frontend
+      - name: Install UI dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build UI
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NINEROUTER_UI_ONLY: "1"
+        run: npm run build
+      - name: Build Rust release
+        run: cargo build --release --manifest-path rust-backend/Cargo.toml
+      - name: Start strict stack
+        env:
+          PORT: "20128"
+          NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
+          NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
+          NINEROUTER_UI_ONLY: "1"
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p "$NINEROUTER_DATA_DIR"
+          (cd frontend && npm run start -- --hostname 127.0.0.1 --port 20129 >"${RUNNER_TEMP}/ui.log" 2>&1 & echo $! >"${RUNNER_TEMP}/ui.pid")
+          ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 & echo $! >"${RUNNER_TEMP}/rust.pid"
+          ./scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
+      - name: Smoke test Rust and UI
+        run: ./scripts/full-stack-smoke.sh http://127.0.0.1:20128
+      - name: Strict parity gate
+        run: ./scripts/release-gate.sh .
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo '--- Rust log ---'
+          cat "${RUNNER_TEMP}/rust.log" || true
+          echo '--- UI log ---'
+          cat "${RUNNER_TEMP}/ui.log" || true
