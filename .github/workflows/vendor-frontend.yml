@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: vendor-pinned-frontend
+  cancel-in-progress: false
+
 jobs:
   vendor-and-build:
     runs-on: ubuntu-latest
@@ -195,4 +199,6 @@ jobs:
             exit 0
           fi
           git commit -m 'Vendor verified UI-only frontend and upstream route inventory'
+          git fetch origin main
+          git rebase origin/main
           git push origin HEAD:main
