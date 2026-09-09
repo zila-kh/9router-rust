@@ -39,8 +39,14 @@ pub async fn handle(
     req: Request<Body>,
 ) -> Result<Response<Body>, AppError> {
     let path = req.uri().path().to_string();
-    if req.method() == axum::http::Method::OPTIONS { return cors_preflight(); }
-    let query_key = req.uri().query().and_then(|q| url::form_urlencoded::parse(q.as_bytes()).find(|(k,_)| k=="key").map(|(_,v)| v.into_owned()));
+    if req.method() == axum::http::Method::OPTIONS {
+        return cors_preflight();
+    }
+    let query_key = req.uri().query().and_then(|q| {
+        url::form_urlencoded::parse(q.as_bytes())
+            .find(|(k, _)| k == "key")
+            .map(|(_, v)| v.into_owned())
+    });
     if is_models_path(&path) && req.method() == axum::http::Method::GET {
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
         return json_response(StatusCode::OK, providers::all_models_openai());
@@ -60,7 +66,8 @@ pub async fn handle(
             incoming["model"] = Value::String(model);
         }
     }
-    let wants_stream = request_wants_stream(caller, &parts.headers, parts.uri.query(), &incoming, &path);
+    let wants_stream =
+        request_wants_stream(caller, &parts.headers, parts.uri.query(), &incoming, &path);
     let mut canonical = translate::normalize_request(incoming, caller)?;
     let requested = canonical
         .get("model")
@@ -72,7 +79,16 @@ pub async fn handle(
     let mut last_error: Option<AppError> = None;
     for target in targets {
         canonical["model"] = Value::String(target.clone());
-        match execute_target(&state, &parts.headers, caller, wants_stream, canonical.clone(), &target).await {
+        match execute_target(
+            &state,
+            &parts.headers,
+            caller,
+            wants_stream,
+            canonical.clone(),
+            &target,
+        )
+        .await
+        {
             Ok(resp) => return Ok(resp),
             Err(e) => {
                 tracing::warn!(model=%target, error=%e, "model candidate failed");
@@ -84,13 +100,27 @@ pub async fn handle(
     Err(last_error.unwrap_or_else(|| AppError::NotFound(format!("no route for model {requested}"))))
 }
 
-pub(crate) fn authorize_llm(state: &AppState, peer: SocketAddr, headers: &HeaderMap, query_key: Option<&str>) -> Result<(), AppError> {
-    let settings=state.db.settings()?;
-    let local=auth::is_loopback_ip(peer.ip());
-    let require = !local || settings.get("requireApiKey").and_then(Value::as_bool).unwrap_or(true);
-    if !require { return Ok(()); }
+pub(crate) fn authorize_llm(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    query_key: Option<&str>,
+) -> Result<(), AppError> {
+    let settings = state.db.settings()?;
+    let local = auth::is_loopback_ip(peer.ip());
+    let require = !local
+        || settings
+            .get("requireApiKey")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+    if !require {
+        return Ok(());
+    }
     let key = auth::extract_api_key(headers, query_key);
-    match key { Some(k) if state.db.validate_api_key(&k)? => Ok(()), _ => Err(AppError::Unauthorized) }
+    match key {
+        Some(k) if state.db.validate_api_key(&k)? => Ok(()),
+        _ => Err(AppError::Unauthorized),
+    }
 }
 
 fn is_models_path(path: &str) -> bool {
@@ -105,11 +135,19 @@ fn gemini_model_from_path(path: &str) -> Option<String> {
     (!model.is_empty()).then(|| model.to_string())
 }
 
-fn request_wants_stream(caller: Format, headers: &HeaderMap, query: Option<&str>, body: &Value, path: &str) -> bool {
+fn request_wants_stream(
+    caller: Format,
+    headers: &HeaderMap,
+    query: Option<&str>,
+    body: &Value,
+    path: &str,
+) -> bool {
     if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
         return true;
     }
-    if caller == Format::Gemini && (path.contains(":streamGenerateContent") || query.unwrap_or("").contains("alt=sse")) {
+    if caller == Format::Gemini
+        && (path.contains(":streamGenerateContent") || query.unwrap_or("").contains("alt=sse"))
+    {
         return true;
     }
     headers
@@ -124,7 +162,12 @@ fn combo_targets(state: &AppState, requested: &str) -> Result<Vec<String>, AppEr
         return Ok(vec![requested.to_string()]);
     };
     let mut out = Vec::new();
-    for item in combo.get("models").and_then(Value::as_array).cloned().unwrap_or_default() {
+    for item in combo
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
         if let Some(s) = item.as_str() {
             out.push(s.to_string());
         } else if let Some(s) = item.get("model").and_then(Value::as_str) {
@@ -134,7 +177,9 @@ fn combo_targets(state: &AppState, requested: &str) -> Result<Vec<String>, AppEr
         }
     }
     if out.is_empty() {
-        return Err(AppError::BadRequest(format!("combo {requested} has no enabled models")));
+        return Err(AppError::BadRequest(format!(
+            "combo {requested} has no enabled models"
+        )));
     }
     Ok(out)
 }
@@ -148,14 +193,30 @@ async fn execute_target(
     target: &str,
 ) -> Result<Response<Body>, AppError> {
     let resolved = providers::resolve_model(state, target)?;
-    let connections = state.db.provider_connections(Some(&resolved.provider), Some(true))?;
+    let connections = state
+        .db
+        .provider_connections(Some(&resolved.provider), Some(true))?;
     if connections.is_empty() {
-        return Err(AppError::NotFound(format!("no active connection for provider {}", resolved.provider)));
+        return Err(AppError::NotFound(format!(
+            "no active connection for provider {}",
+            resolved.provider
+        )));
     }
 
     let mut last: Option<AppError> = None;
     for connection in connections {
-        match execute_connection(state, client_headers, caller, wants_stream, canonical.clone(), &resolved.provider, &resolved.model, connection).await {
+        match execute_connection(
+            state,
+            client_headers,
+            caller,
+            wants_stream,
+            canonical.clone(),
+            &resolved.provider,
+            &resolved.model,
+            connection,
+        )
+        .await
+        {
             Ok(r) => return Ok(r),
             Err(e) => {
                 tracing::warn!(provider=%resolved.provider, model=%resolved.model, error=%e, "provider account failed");
@@ -163,7 +224,9 @@ async fn execute_target(
             }
         }
     }
-    Err(last.unwrap_or_else(|| AppError::Upstream(format!("all accounts failed for {}", resolved.provider))))
+    Err(last.unwrap_or_else(|| {
+        AppError::Upstream(format!("all accounts failed for {}", resolved.provider))
+    }))
 }
 
 async fn execute_connection(
@@ -177,13 +240,40 @@ async fn execute_connection(
     connection: Value,
 ) -> Result<Response<Body>, AppError> {
     let transport = providers::transport(provider);
-    let transport_format = transport.get("format").and_then(Value::as_str).unwrap_or("openai");
+    let transport_format = transport
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or("openai");
 
     match transport_format {
-        "kiro" => return crate::special::kiro::execute(state, caller, wants_stream, canonical, model, &connection, &transport).await,
-        "commandcode" => return crate::special::commandcode::execute(state, caller, wants_stream, canonical, model, &connection, &transport).await,
+        "kiro" => {
+            return crate::special::kiro::execute(
+                state,
+                caller,
+                wants_stream,
+                canonical,
+                model,
+                &connection,
+                &transport,
+            )
+            .await
+        }
+        "commandcode" => {
+            return crate::special::commandcode::execute(
+                state,
+                caller,
+                wants_stream,
+                canonical,
+                model,
+                &connection,
+                &transport,
+            )
+            .await
+        }
         "cursor" | "windsurf" => {
-            return Err(AppError::Upstream(format!("{transport_format} transport requires the dedicated binary executor")));
+            return Err(AppError::Upstream(format!(
+                "{transport_format} transport requires the dedicated binary executor"
+            )));
         }
         _ => {}
     }
@@ -192,46 +282,97 @@ async fn execute_connection(
     let mut upstream_body = translate::provider_request(canonical.clone(), provider_format)?;
     upstream_body["model"] = Value::String(model.to_string());
 
-    let force_stream = transport.get("forceStream").and_then(Value::as_bool).unwrap_or(false);
+    let force_stream = transport
+        .get("forceStream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let upstream_stream = wants_stream || force_stream;
     upstream_body["stream"] = Value::Bool(upstream_stream);
 
     let (url, _) = providers::endpoint(provider, &connection, "chat", model)?;
     let url = build_format_url(&url, provider_format, model, upstream_stream);
-    let req = build_upstream_request(state, provider, &transport, &connection, client_headers, &url, &upstream_body)?;
+    let req = build_upstream_request(
+        state,
+        provider,
+        &transport,
+        &connection,
+        client_headers,
+        &url,
+        &upstream_body,
+    )?;
     let started = std::time::Instant::now();
-    let response = req.send().await.map_err(|e| AppError::Upstream(format!("{provider} request failed: {e}")))?;
+    let response = req
+        .send()
+        .await
+        .map_err(|e| AppError::Upstream(format!("{provider} request failed: {e}")))?;
     let status = response.status();
-    let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v|v.to_str().ok()).map(str::to_string);
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
 
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
-        let _ = state.db.usage_record(Some(provider), Some(model), connection.get("id").and_then(Value::as_str), &url, 0, 0, &format!("http_{}",status.as_u16()), &json!({"error":text,"durationMs":started.elapsed().as_millis()}));
-        return Err(AppError::Upstream(format!("{provider} returned HTTP {}: {}", status.as_u16(), truncate(&text, 2048))));
+        let _ = state.db.usage_record(
+            Some(provider),
+            Some(model),
+            connection.get("id").and_then(Value::as_str),
+            &url,
+            0,
+            0,
+            &format!("http_{}", status.as_u16()),
+            &json!({"error":text,"durationMs":started.elapsed().as_millis()}),
+        );
+        return Err(AppError::Upstream(format!(
+            "{provider} returned HTTP {}: {}",
+            status.as_u16(),
+            truncate(&text, 2048)
+        )));
     }
 
     if wants_stream && caller == provider_format && upstream_stream {
         let headers = response.headers().clone();
-        let stream = response.bytes_stream().map(|r| r.map_err(std::io::Error::other));
+        let stream = response
+            .bytes_stream()
+            .map(|r| r.map_err(std::io::Error::other));
         let mut out = Response::new(Body::from_stream(stream));
         *out.status_mut() = StatusCode::OK;
         copy_response_headers(&headers, out.headers_mut());
         return Ok(out);
     }
 
-    let bytes = response.bytes().await.map_err(|e| AppError::Upstream(format!("failed reading {provider} response: {e}")))?;
-    let native: Value = if upstream_stream || streaming::looks_streaming(content_type.as_deref(), &bytes) {
-        streaming::reduce_stream(&bytes, provider_format, model)?
-    } else {
-        serde_json::from_slice(&bytes).map_err(|e| AppError::Upstream(format!("invalid {provider} JSON response: {e}")))?
-    };
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| AppError::Upstream(format!("failed reading {provider} response: {e}")))?;
+    let native: Value =
+        if upstream_stream || streaming::looks_streaming(content_type.as_deref(), &bytes) {
+            streaming::reduce_stream(&bytes, provider_format, model)?
+        } else {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| AppError::Upstream(format!("invalid {provider} JSON response: {e}")))?
+        };
     let canonical_response = translate::normalize_response(native, provider_format)?;
-    let usage = canonical_response.get("usage").cloned().unwrap_or_else(||json!({}));
+    let usage = canonical_response
+        .get("usage")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let _ = state.db.usage_record(
-        Some(provider), Some(model), connection.get("id").and_then(Value::as_str), &url,
-        usage.get("prompt_tokens").and_then(Value::as_i64).unwrap_or(0),
-        usage.get("completion_tokens").and_then(Value::as_i64).unwrap_or(0),
-        "ok", &json!({"durationMs":started.elapsed().as_millis()}),
+        Some(provider),
+        Some(model),
+        connection.get("id").and_then(Value::as_str),
+        &url,
+        usage
+            .get("prompt_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        usage
+            .get("completion_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        "ok",
+        &json!({"durationMs":started.elapsed().as_millis()}),
     );
 
     if wants_stream {
@@ -269,29 +410,44 @@ fn build_upstream_request(
 ) -> Result<reqwest::RequestBuilder, AppError> {
     let mut rb = state.http.post(url).json(body);
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(reqwest::header::CONTENT_TYPE, reqwest::header::HeaderValue::from_static("application/json"));
+    h.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
 
     if let Some(map) = transport.get("headers").and_then(Value::as_object) {
-        for (k,v) in map {
+        for (k, v) in map {
             if let Some(v) = v.as_str() {
-                if let (Ok(n),Ok(v)) = (reqwest::header::HeaderName::from_bytes(k.as_bytes()), reqwest::header::HeaderValue::from_str(v)) {
-                    h.insert(n,v);
+                if let (Ok(n), Ok(v)) = (
+                    reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                    reqwest::header::HeaderValue::from_str(v),
+                ) {
+                    h.insert(n, v);
                 }
             }
         }
     }
-    if let Some((name,value)) = providers::auth_header(connection, transport) {
-        let name=reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|e|AppError::Internal(e.into()))?;
-        let value=reqwest::header::HeaderValue::from_str(&value).map_err(|e|AppError::Internal(e.into()))?;
-        h.insert(name,value);
+    if let Some((name, value)) = providers::auth_header(connection, transport) {
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|e| AppError::Internal(e.into()))?;
+        let value = reqwest::header::HeaderValue::from_str(&value)
+            .map_err(|e| AppError::Internal(e.into()))?;
+        h.insert(name, value);
     }
-    if transport.get("format").and_then(Value::as_str)==Some("claude") && !h.contains_key("anthropic-version") {
-        h.insert(reqwest::header::HeaderName::from_static("anthropic-version"), reqwest::header::HeaderValue::from_static("2023-06-01"));
+    if transport.get("format").and_then(Value::as_str) == Some("claude")
+        && !h.contains_key("anthropic-version")
+    {
+        h.insert(
+            reqwest::header::HeaderName::from_static("anthropic-version"),
+            reqwest::header::HeaderValue::from_static("2023-06-01"),
+        );
     }
     for name in ["x-request-id", "user-agent"] {
-        if let Some(v)=client_headers.get(name) {
-            if let Ok(v)=reqwest::header::HeaderValue::from_bytes(v.as_bytes()) {
-                if let Ok(n)=reqwest::header::HeaderName::from_bytes(name.as_bytes()) { h.entry(n).or_insert(v); }
+        if let Some(v) = client_headers.get(name) {
+            if let Ok(v) = reqwest::header::HeaderValue::from_bytes(v.as_bytes()) {
+                if let Ok(n) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) {
+                    h.entry(n).or_insert(v);
+                }
             }
         }
     }
@@ -300,10 +456,28 @@ fn build_upstream_request(
     Ok(rb)
 }
 
-fn copy_response_headers(src:&reqwest::header::HeaderMap,dst:&mut HeaderMap){
-    for (k,v) in src {
-        if matches!(k.as_str().to_ascii_lowercase().as_str(),"connection"|"keep-alive"|"proxy-authenticate"|"proxy-authorization"|"te"|"trailers"|"transfer-encoding"|"upgrade"|"content-length") {continue}
-        if let (Ok(name),Ok(value))=(HeaderName::from_bytes(k.as_str().as_bytes()),HeaderValue::from_bytes(v.as_bytes())){dst.append(name,value);}
+fn copy_response_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
+    for (k, v) in src {
+        if matches!(
+            k.as_str().to_ascii_lowercase().as_str(),
+            "connection"
+                | "keep-alive"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "te"
+                | "trailers"
+                | "transfer-encoding"
+                | "upgrade"
+                | "content-length"
+        ) {
+            continue;
+        }
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(k.as_str().as_bytes()),
+            HeaderValue::from_bytes(v.as_bytes()),
+        ) {
+            dst.append(name, value);
+        }
     }
 }
 
@@ -312,10 +486,40 @@ fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, App
     bytes_response(status, "application/json", bytes)
 }
 
-fn bytes_response(status:StatusCode,content_type:&str,bytes:impl Into<Bytes>)->Result<Response<Body>,AppError>{
-    let mut r=Response::new(Body::from(bytes.into()));*r.status_mut()=status;r.headers_mut().insert(header::CONTENT_TYPE,HeaderValue::from_str(content_type).map_err(|e|AppError::Internal(e.into()))?);Ok(r)
+fn bytes_response(
+    status: StatusCode,
+    content_type: &str,
+    bytes: impl Into<Bytes>,
+) -> Result<Response<Body>, AppError> {
+    let mut r = Response::new(Body::from(bytes.into()));
+    *r.status_mut() = status;
+    r.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(content_type).map_err(|e| AppError::Internal(e.into()))?,
+    );
+    Ok(r)
 }
 
-fn cors_preflight()->Result<Response<Body>,AppError>{let mut r=Response::new(Body::empty());*r.status_mut()=StatusCode::NO_CONTENT;r.headers_mut().insert("access-control-allow-origin",HeaderValue::from_static("*"));r.headers_mut().insert("access-control-allow-methods",HeaderValue::from_static("GET, POST, OPTIONS"));r.headers_mut().insert("access-control-allow-headers",HeaderValue::from_static("*"));Ok(r)}
+fn cors_preflight() -> Result<Response<Body>, AppError> {
+    let mut r = Response::new(Body::empty());
+    *r.status_mut() = StatusCode::NO_CONTENT;
+    r.headers_mut()
+        .insert("access-control-allow-origin", HeaderValue::from_static("*"));
+    r.headers_mut().insert(
+        "access-control-allow-methods",
+        HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    r.headers_mut().insert(
+        "access-control-allow-headers",
+        HeaderValue::from_static("*"),
+    );
+    Ok(r)
+}
 
-fn truncate(s:&str,n:usize)->String{if s.chars().count()<=n{s.to_string()}else{format!("{}…",s.chars().take(n).collect::<String>())}}
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n).collect::<String>())
+    }
+}

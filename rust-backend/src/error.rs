@@ -1,4 +1,8 @@
-use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,7 +31,10 @@ impl IntoResponse for AppError {
             Self::Upstream(m) => (StatusCode::BAD_GATEWAY, m.clone()),
             Self::Internal(e) => {
                 tracing::error!(error=?e, "internal error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".into(),
+                )
             }
         };
         (status, Json(json!({"error": message}))).into_response()
@@ -35,11 +42,17 @@ impl IntoResponse for AppError {
 }
 
 impl From<rusqlite::Error> for AppError {
-    fn from(value: rusqlite::Error) -> Self { Self::Internal(value.into()) }
+    fn from(value: rusqlite::Error) -> Self {
+        Self::Internal(value.into())
+    }
 }
 impl From<reqwest::Error> for AppError {
-    fn from(value: reqwest::Error) -> Self { Self::Upstream(value.to_string()) }
+    fn from(value: reqwest::Error) -> Self {
+        Self::Upstream(value.to_string())
+    }
 }
 impl From<serde_json::Error> for AppError {
-    fn from(value: serde_json::Error) -> Self { Self::BadRequest(value.to_string()) }
+    fn from(value: serde_json::Error) -> Self {
+        Self::BadRequest(value.to_string())
+    }
 }

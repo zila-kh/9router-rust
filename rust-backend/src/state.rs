@@ -1,6 +1,6 @@
-use std::{sync::Arc, time::Duration};
-use reqwest::Client;
 use crate::{config::Config, db::Db};
+use reqwest::Client;
+use std::{sync::Arc, time::Duration};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -17,6 +17,10 @@ impl AppState {
             .http2_adaptive_window(true)
             .user_agent("9router-rust/1.0.1")
             .build()?;
-        Ok(Self { config: Arc::new(config), db, http })
+        Ok(Self {
+            config: Arc::new(config),
+            db,
+            http,
+        })
     }
 }

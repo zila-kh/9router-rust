@@ -1,4 +1,8 @@
-use std::{env, net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf};
+use std::{
+    env,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -27,13 +31,17 @@ impl Config {
         let db_path = env::var_os("NINEROUTER_DB_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| data_dir.join("db").join("data.sqlite"));
-        let ui_origin = env::var("NINEROUTER_UI_ORIGIN")
-            .unwrap_or_else(|_| "http://127.0.0.1:20129".into());
+        let ui_origin =
+            env::var("NINEROUTER_UI_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:20129".into());
         let upstream_timeout_secs = env::var("NINEROUTER_UPSTREAM_TIMEOUT_SECS")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(600);
-        let ui_only_header_secret = env::var("NINEROUTER_UI_SECRET")
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-        let legacy_backend_origin = env::var("NINEROUTER_LEGACY_BACKEND_ORIGIN").ok().filter(|v| !v.trim().is_empty());
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600);
+        let ui_only_header_secret =
+            env::var("NINEROUTER_UI_SECRET").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+        let legacy_backend_origin = env::var("NINEROUTER_LEGACY_BACKEND_ORIGIN")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
         Self {
             listen: SocketAddr::new(host, port),
             ui_origin,
