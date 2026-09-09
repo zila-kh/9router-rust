@@ -1,0 +1,127 @@
+name: Repair Rust compile errors
+
+on:
+  push:
+    paths:
+      - .github/workflows/repair-rust-compile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply compiler-driven repairs
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new, count=None):
+              file = Path(path)
+              text = file.read_text()
+              occurrences = text.count(old)
+              if count is not None and occurrences != count:
+                  raise SystemExit(f"{path}: expected {count} occurrences, found {occurrences}: {old!r}")
+              if occurrences == 0:
+                  raise SystemExit(f"{path}: pattern not found: {old!r}")
+              file.write_text(text.replace(old, new))
+
+          replace(
+              "rust-backend/src/db.rs",
+              "use chrono::{TimeZone, Utc};",
+              "use chrono::Utc;",
+              1,
+          )
+          replace(
+              "rust-backend/src/ui_proxy.rs",
+              "StatusCode, Uri},",
+              "StatusCode},",
+              1,
+          )
+          replace(
+              "rust-backend/src/ui_proxy.rs",
+              "            h.append(n, v)\n",
+              "            h.append(n, v);\n",
+              1,
+          )
+          replace(
+              "rust-backend/src/ui_proxy.rs",
+              "        h.insert(reqwest::header::HeaderName::from_static(\"x-9r-real-ip\"), v)\n",
+              "        h.insert(reqwest::header::HeaderName::from_static(\"x-9r-real-ip\"), v);\n",
+              1,
+          )
+          replace(
+              "rust-backend/src/ui_proxy.rs",
+              "            dst.append(k, v)\n",
+              "            dst.append(k, v);\n",
+              1,
+          )
+          replace(
+              "rust-backend/src/legacy_proxy.rs",
+              "            dst.append(k, v)\n",
+              "            dst.append(k, v);\n",
+              1,
+          )
+
+          translate = Path("rust-backend/src/translate.rs")
+          text = translate.read_text()
+          replacements = {
+              '        out.insert("model".into(), v)\n': '        out.insert("model".into(), v);\n',
+              '        out.insert("max_tokens".into(), v)\n': '        out.insert("max_tokens".into(), v);\n',
+              '        out.insert("temperature".into(), v)\n': '        out.insert("temperature".into(), v);\n',
+              '        out.insert("top_p".into(), v)\n': '        out.insert("top_p".into(), v);\n',
+              '        out.insert("stop".into(), v)\n': '        out.insert("stop".into(), v);\n',
+              '        out.insert("stream".into(), v)\n': '        out.insert("stream".into(), v);\n',
+              '        out.insert("tools".into(), Value::Array(arr))\n': '        out.insert("tools".into(), Value::Array(arr));\n',
+              '        out.insert("tool_choice".into(), v)\n': '        out.insert("tool_choice".into(), v);\n',
+          }
+          for old, new in replacements.items():
+              n = text.count(old)
+              if n < 1:
+                  raise SystemExit(f"translate.rs: pattern not found: {old!r}")
+              text = text.replace(old, new, 1)
+          translate.write_text(text)
+
+          streaming = Path("rust-backend/src/streaming.rs")
+          text = streaming.read_text()
+          text = text.replace(
+              '.and_then(Value::as_str)\n                            .unwrap_or(\"\");\n                        content[idx][\"type\"] = json!(\"text\");',
+              '.and_then(Value::as_str)\n                            .unwrap_or(\"\")\n                            .to_owned();\n                        content[idx][\"type\"] = json!(\"text\");',
+              1,
+          )
+          text = text.replace(
+              '.and_then(Value::as_str)\n                            .unwrap_or(\"\");\n                        content[idx][\"_partial_json\"]',
+              '.and_then(Value::as_str)\n                            .unwrap_or(\"\")\n                            .to_owned();\n                        content[idx][\"_partial_json\"]',
+              1,
+          )
+          text = text.replace(
+              '.and_then(Value::as_str)\n                            .unwrap_or(\"\");\n                        content[idx][\"type\"] = json!(\"thinking\");',
+              '.and_then(Value::as_str)\n                            .unwrap_or(\"\")\n                            .to_owned();\n                        content[idx][\"type\"] = json!(\"thinking\");',
+              1,
+          )
+          streaming.write_text(text)
+      - name: Format
+        run: cargo fmt --manifest-path rust-backend/Cargo.toml --all
+      - name: Check
+        run: cargo check --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Commit verified repairs
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add rust-backend
+          if git diff --cached --quiet; then
+            echo 'No repairs to commit.'
+            exit 0
+          fi
+          git commit -m 'Fix initial Rust compiler errors'
+          git push origin HEAD:main
