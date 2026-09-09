@@ -47,9 +47,10 @@ async fn proxy(
     let mut rb = state.http.request(method, &url).body(bytes);
     let mut h = reqwest::header::HeaderMap::new();
     for (k, v) in parts.headers.iter() {
-        let name = k.as_str().to_ascii_lowercase();
+        let name = k.as_str();
+        let lower = name.to_ascii_lowercase();
         if matches!(
-            name.as_str(),
+            lower.as_str(),
             "host"
                 | "connection"
                 | "keep-alive"
@@ -63,8 +64,9 @@ async fn proxy(
         ) {
             continue;
         }
+        // Preserve original case for Next.js internal headers
         if let (Ok(n), Ok(v)) = (
-            reqwest::header::HeaderName::from_bytes(k.as_str().as_bytes()),
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()),
             reqwest::header::HeaderValue::from_bytes(v.as_bytes()),
         ) {
             h.append(n, v);
@@ -94,9 +96,10 @@ async fn proxy(
 }
 fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
     for (k, v) in src {
-        let n = k.as_str().to_ascii_lowercase();
+        let name = k.as_str();
+        let lower = name.to_ascii_lowercase();
         if matches!(
-            n.as_str(),
+            lower.as_str(),
             "connection"
                 | "keep-alive"
                 | "proxy-authenticate"
@@ -109,8 +112,9 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
         ) {
             continue;
         }
+        // Preserve original case for Next.js internal headers
         if let (Ok(k), Ok(v)) = (
-            HeaderName::from_bytes(k.as_str().as_bytes()),
+            HeaderName::from_bytes(name.as_bytes()),
             HeaderValue::from_bytes(v.as_bytes()),
         ) {
             dst.append(k, v);
