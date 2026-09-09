@@ -27,7 +27,7 @@ jobs:
           git clone --filter=blob:none https://github.com/decolua/9router.git /tmp/9router-upstream
           git -C /tmp/9router-upstream checkout eb712ca821f0ba6bc41043fbd14494c5af5daba5
           test "$(git -C /tmp/9router-upstream rev-parse HEAD)" = "eb712ca821f0ba6bc41043fbd14494c5af5daba5"
-      - name: Export the exact provider catalog for Rust
+      - name: Export exact provider catalog and route inventory
         shell: bash
         run: |
           mkdir -p /tmp/9router-upstream/rust-backend/assets
@@ -35,7 +35,28 @@ jobs:
           (cd /tmp/9router-upstream && node scripts/export-rust-catalog.mjs)
           cp /tmp/9router-upstream/rust-backend/assets/provider-catalog.json rust-backend/assets/provider-catalog.json
           node -e 'const c=require("./rust-backend/assets/provider-catalog.json"); if (!Array.isArray(c.registry) || c.registry.length < 50) process.exit(1); console.log(`catalog entries: ${c.registry.length}`)'
-      - name: Vendor frontend source
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          app = Path('/tmp/9router-upstream/src/app')
+          routes = []
+          for path in sorted((app / 'api').rglob('route.js')):
+              text = path.read_text(errors='ignore')
+              methods = sorted(set(re.findall(r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\b', text)))
+              routes.append({
+                  'file': path.relative_to(app).as_posix(),
+                  'methods': methods,
+              })
+          out = {
+              'upstreamCommit': 'eb712ca821f0ba6bc41043fbd14494c5af5daba5',
+              'routes': routes,
+          }
+          Path('rust-backend/parity/upstream-routes.json').write_text(json.dumps(out, indent=2) + '\n')
+          print(f'upstream route files: {len(routes)}')
+          PY
+      - name: Vendor frontend source only
         shell: bash
         run: |
           rm -rf frontend
@@ -50,7 +71,9 @@ jobs:
             --exclude=cli \
             --exclude=docs \
             --exclude=skills \
+            --exclude=rust-backend \
             /tmp/9router-upstream/ frontend/
+          rm -rf frontend/src/app/api
           printf '%s\n' 'eb712ca821f0ba6bc41043fbd14494c5af5daba5' > frontend/.upstream-commit
       - name: Convert Next application to UI-only mode
         shell: bash
@@ -151,6 +174,8 @@ jobs:
         run: |
           test -f frontend/.next/BUILD_ID
           test -f frontend/package-lock.json
+          test ! -d frontend/src/app/api
+          test ! -d frontend/rust-backend
           grep -q 'RUST_BACKEND_REQUIRED' frontend/src/proxy.js
           grep -q 'NINEROUTER_UI_ONLY' frontend/src/instrumentation.js
           ! grep -q '@/lib/network/initOutboundProxy' frontend/src/app/layout.js
@@ -163,11 +188,11 @@ jobs:
           rm -rf frontend/node_modules frontend/.next
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add frontend rust-backend/assets/provider-catalog.json
+          git add frontend rust-backend/assets/provider-catalog.json rust-backend/parity/upstream-routes.json
           git add -f frontend/package-lock.json
           if git diff --cached --quiet; then
-            echo 'Vendored frontend and catalog are already current.'
+            echo 'Vendored frontend, catalog, and route inventory are already current.'
             exit 0
           fi
-          git commit -m 'Vendor verified pinned frontend and generated Rust catalog'
+          git commit -m 'Vendor verified UI-only frontend and upstream route inventory'
           git push origin HEAD:main
