@@ -88,6 +88,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import json
+          import re
 
           layout = Path('frontend/src/app/layout.js')
           lines = layout.read_text().splitlines()
@@ -123,6 +124,23 @@ jobs:
           data['scripts']['dev:ui'] = 'next dev --webpack --hostname 127.0.0.1 --port 20129'
           data['scripts']['start:ui'] = 'next start --hostname 127.0.0.1 --port 20129'
           package.write_text(json.dumps(data, indent=2) + '\n')
+
+          # Upstream contains public installed-app OAuth credentials. Keep tracked
+          # source secret-free and resolve these through the Rust runtime instead.
+          client_id = re.compile(r'\b[0-9]{8,}-[A-Za-z0-9._-]+\.apps\.googleusercontent\.com\b')
+          client_secret = re.compile(r'\bGOCSPX-[A-Za-z0-9_-]+\b')
+          roots = [Path('frontend'), Path('rust-backend/assets/provider-catalog.json')]
+          for root in roots:
+              paths = [root] if root.is_file() else [p for p in root.rglob('*') if p.is_file()]
+              for path in paths:
+                  try:
+                      value = path.read_text()
+                  except (UnicodeDecodeError, OSError):
+                      continue
+                  updated = client_id.sub('env:NINEROUTER_GOOGLE_CLIENT_ID', value)
+                  updated = client_secret.sub('env:NINEROUTER_GOOGLE_CLIENT_SECRET', updated)
+                  if updated != value:
+                      path.write_text(updated)
           PY
       - name: Install and build pinned frontend
         working-directory: frontend
@@ -140,6 +158,7 @@ jobs:
           ! grep -q '@/lib/network/initOutboundProxy' frontend/src/app/layout.js
           ! grep -q '@/shared/services/bootstrap' frontend/src/app/layout.js
           ! grep -q 'initConsoleLogCapture' frontend/src/app/layout.js
+          ! grep -R -E '[0-9]{8,}-[A-Za-z0-9._-]+\.apps\.googleusercontent\.com|GOCSPX-[A-Za-z0-9_-]+' frontend rust-backend/assets/provider-catalog.json
       - name: Remove build products and commit verified source
         shell: bash
         run: |
