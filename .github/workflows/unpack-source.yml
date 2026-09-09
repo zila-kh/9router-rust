@@ -1,0 +1,38 @@
+name: Unpack Rust source payloads
+
+on:
+  push:
+    paths:
+      - 'rust-backend/source-archive/**'
+      - '.github/workflows/unpack-source.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore exact Rust source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rust-backend/src
+          for name in db management translate; do
+            base64 -d "rust-backend/source-archive/${name}.rs.gz.b64" | gzip -dc > "rust-backend/src/${name}.rs"
+          done
+      - name: Commit restored sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add rust-backend/src/db.rs rust-backend/src/management.rs rust-backend/src/translate.rs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Restore large Rust source modules'
+          git push origin HEAD:main
