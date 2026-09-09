@@ -1,5 +1,7 @@
 # 9Router Rust backend port 1.0.1
 
+[![CI](https://github.com/zila-kh/9router-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/zila-kh/9router-rust/actions/workflows/ci.yml)
+
 Backend-only Rust port overlay for the existing 9Router Next/React UI.
 
 - Upstream repository: `decolua/9router`
