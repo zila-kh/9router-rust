@@ -405,10 +405,10 @@ fn translator_translate(state: &AppState, body: Value) -> Result<Response<Body>,
             }
             let mut result = crate::translate::normalize_request(client_body, source)?;
             result["model"] = json!(resolved.model);
-            return json_response(
+            json_response(
                 StatusCode::OK,
                 json!({"success": true, "result": {"body": result}}),
-            );
+            )
         }
         3 => {
             let openai_body = wrapper

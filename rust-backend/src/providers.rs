@@ -40,9 +40,11 @@ static CATALOG: Lazy<Value> = Lazy::new(load_catalog);
 
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
+    #[allow(dead_code)]
     pub requested: String,
     pub provider: String,
     pub model: String,
+    #[allow(dead_code)]
     pub connection: Value,
 }
 

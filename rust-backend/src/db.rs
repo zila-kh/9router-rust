@@ -155,7 +155,7 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
     pub fn provider_connection(&self, id: &str) -> Result<Option<Value>, AppError> {
         self.with_conn(|db| {
             let mut stmt = db.prepare("SELECT id,provider,authType,name,email,priority,isActive,data,createdAt,updatedAt FROM providerConnections WHERE id=?1")?;
-            let v = stmt.query_row(params![id], |r| connection_row_sql(r)).optional()?;
+            let v = stmt.query_row(params![id], connection_row_sql).optional()?;
             Ok(v)
         })
     }
@@ -502,7 +502,7 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
             "providerNodes" => self.with_conn(|db| {
                 list_data_rows(db, "providerNodes", "id,type,name,data,createdAt,updatedAt")
             }),
-            "proxyPools" => self.with_conn(|db| list_proxy_pool_rows(db)),
+            "proxyPools" => self.with_conn(list_proxy_pool_rows),
             _ => Err(AppError::BadRequest("unsupported table".into())),
         }
     }

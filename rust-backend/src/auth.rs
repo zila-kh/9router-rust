@@ -14,6 +14,7 @@ use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionClaims {
     pub authenticated: bool,
@@ -141,9 +142,7 @@ pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .ok()?
         .split(';')
         .find_map(|part| {
-            let mut p = part.trim().splitn(2, '=');
-            let k = p.next()?;
-            let v = p.next()?;
+            let (k, v) = part.trim().split_once('=')?;
             if k == name {
                 Some(v.to_string())
             } else {
@@ -170,6 +169,7 @@ pub fn require_dashboard(state: &AppState, headers: &HeaderMap) -> Result<(), Ap
     }
 }
 
+#[allow(dead_code)]
 pub fn require_llm(
     state: &AppState,
     headers: &HeaderMap,

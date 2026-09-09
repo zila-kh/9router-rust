@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod eventstream;
 pub mod grpc_web;
 pub mod protobuf;

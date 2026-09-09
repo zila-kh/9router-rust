@@ -11,6 +11,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub db_path: PathBuf,
     pub upstream_timeout_secs: u64,
+    #[allow(dead_code)]
     pub ui_only_header_secret: String,
     pub legacy_backend_origin: Option<String>,
 }

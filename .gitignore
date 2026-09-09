@@ -1,0 +1,55 @@
+# Rust build artifacts
+target/
+rust-backend/target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# Node & Frontend dependencies and builds
+node_modules/
+frontend/node_modules/
+.pnp
+.pnp.*
+frontend/.next/
+frontend/out/
+frontend/build/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local databases and runtime state
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment configuration
+.env
+.env*.local
+.env.development
+.env.test
+.env.production
+!.env.example
+!frontend/.env.example
+
+# OS & Editor artifacts
+.DS_Store
+Thumbs.db
+.idea/
+*.sublime-workspace
+*.sublime-project
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json

@@ -247,18 +247,12 @@ fn to_kiro(model: &str, b: &Value, c: &Value) -> Result<Value, AppError> {
     if let Some(v) = b.get("top_p") {
         payload["inferenceConfig"]["topP"] = v.clone()
     }
-    let auth = c
-        .pointer("/providerSpecificData/authMethod")
-        .and_then(Value::as_str)
-        .unwrap_or("");
     let profile = c
         .pointer("/providerSpecificData/profileArn")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if !profile.is_empty() && !matches!(auth, "api_key" | "idc" | "external_idp") {
-        payload["profileArn"] = json!(profile)
-    } else if !profile.is_empty() {
-        payload["profileArn"] = json!(profile)
+    if !profile.is_empty() {
+        payload["profileArn"] = json!(profile);
     }
     Ok(payload)
 }
