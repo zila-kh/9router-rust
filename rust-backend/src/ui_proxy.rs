@@ -23,7 +23,111 @@ pub async fn handle(
     if path.starts_with("/dashboard") && !auth::dashboard_authenticated(&state, req.headers())? {
         return redirect("/login");
     }
+    if is_websocket_request(req.headers()) {
+        return proxy_websocket(state, req).await;
+    }
     proxy(state, peer, req).await
+}
+
+fn is_websocket_request(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::UPGRADE)
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false)
+}
+
+async fn proxy_websocket(
+    state: AppState,
+    mut req: Request<Body>,
+) -> Result<Response<Body>, AppError> {
+    let uri: url::Url = state
+        .config
+        .ui_origin
+        .parse()
+        .map_err(|e: url::ParseError| AppError::Internal(e.into()))?;
+    let host = uri.host_str().unwrap_or("127.0.0.1");
+    let port = uri.port().unwrap_or(20129);
+    let target_addr = format!("{host}:{port}");
+
+    let mut upstream = tokio::net::TcpStream::connect(&target_addr)
+        .await
+        .map_err(|e| AppError::Upstream(format!("WebSocket connect failed to {target_addr}: {e}")))?;
+
+    let path_and_query = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+    let mut req_str = format!("GET {} HTTP/1.1\r\nHost: {}:{}\r\n", path_and_query, host, port);
+    for (k, v) in req.headers() {
+        if !k.as_str().eq_ignore_ascii_case("host") {
+            if let Ok(v_str) = v.to_str() {
+                req_str.push_str(&format!("{}: {}\r\n", k.as_str(), v_str));
+            }
+        }
+    }
+    req_str.push_str("\r\n");
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    upstream
+        .write_all(req_str.as_bytes())
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+
+    let mut response_bytes = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = upstream
+            .read(&mut buf)
+            .await
+            .map_err(|e| AppError::Upstream(e.to_string()))?;
+        if n == 0 {
+            return Err(AppError::Upstream(
+                "Upstream closed during WebSocket handshake".into(),
+            ));
+        }
+        response_bytes.extend_from_slice(&buf[..n]);
+        if let Some(pos) = response_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            let header_str = String::from_utf8_lossy(&response_bytes[..pos]);
+            let leftover = response_bytes[pos + 4..].to_vec();
+
+            let mut lines = header_str.split("\r\n");
+            let status_line = lines.next().unwrap_or("");
+            let status_code = if status_line.contains("101") {
+                StatusCode::SWITCHING_PROTOCOLS
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
+
+            let mut resp = Response::new(Body::empty());
+            *resp.status_mut() = status_code;
+
+            for line in lines {
+                if let Some((k, v)) = line.split_once(": ") {
+                    if let (Ok(hn), Ok(hv)) = (
+                        header::HeaderName::from_bytes(k.as_bytes()),
+                        header::HeaderValue::from_str(v),
+                    ) {
+                        resp.headers_mut().insert(hn, hv);
+                    }
+                }
+            }
+
+            tokio::spawn(async move {
+                match hyper::upgrade::on(&mut req).await {
+                    Ok(upgraded) => {
+                        let mut client_stream = hyper_util::rt::TokioIo::new(upgraded);
+                        if !leftover.is_empty() {
+                            let _ = client_stream.write_all(&leftover).await;
+                        }
+                        let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut upstream).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Client WebSocket upgrade failed: {e}");
+                    }
+                }
+            });
+
+            return Ok(resp);
+        }
+    }
 }
 
 async fn proxy(

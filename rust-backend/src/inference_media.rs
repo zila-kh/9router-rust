@@ -97,7 +97,7 @@ pub async fn handle_v1_search(
     }
 
     let searxng_url = std::env::var("SEARXNG_URL").unwrap_or_else(|_| "http://127.0.0.1:8080/search".into());
-    let mut search_req = state.http.get(&searxng_url).query(&[("q", query), ("format", "json")]);
+    let search_req = state.http.get(&searxng_url).query(&[("q", query), ("format", "json")]);
     
     match search_req.send().await {
         Ok(resp) if resp.status().is_success() => {

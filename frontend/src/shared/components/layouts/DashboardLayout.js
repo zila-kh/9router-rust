@@ -3,8 +3,7 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { useNotificationStore } from "@/store/notificationStore";
-import dynamic from "next/dynamic";
-const Sidebar = dynamic(() => import("../Sidebar"), { ssr: false });
+import Sidebar from "../Sidebar";
 import Header from "../Header";
 
 function getToastStyle(type) {

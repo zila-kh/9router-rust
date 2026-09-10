@@ -135,13 +135,25 @@ pub async fn handle(
             match serde_json::from_slice::<Value>(&raw) {
                 Ok(v) => v,
                 Err(e) => {
-                    if state.config.legacy_backend_origin.is_some() {
+                    let is_form = headers
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|ct| ct.to_str().ok())
+                        .map(|ct| ct.starts_with("application/x-www-form-urlencoded"))
+                        .unwrap_or(false);
+                    if is_form {
+                        let mut map = serde_json::Map::new();
+                        for (k, v) in url::form_urlencoded::parse(&raw) {
+                            map.insert(k.into_owned(), Value::String(v.into_owned()));
+                        }
+                        Value::Object(map)
+                    } else if state.config.legacy_backend_origin.is_some() {
                         return crate::legacy_proxy::proxy_buffered(
                             &state, peer, &method, &uri, &headers, raw,
                         )
                         .await;
+                    } else {
+                        return Err(AppError::BadRequest(e.to_string()));
                     }
-                    return Err(AppError::BadRequest(e.to_string()));
                 }
             }
         }
@@ -265,8 +277,19 @@ fn login(
     headers: &HeaderMap,
     body: Value,
 ) -> Result<Response<Body>, AppError> {
+    let is_html_client = headers
+        .get(header::ACCEPT)
+        .and_then(|a| a.to_str().ok())
+        .map(|a| a.contains("text/html"))
+        .unwrap_or(false);
     let password = body.get("password").and_then(Value::as_str).unwrap_or("");
     if !auth::verify_password(state, password)? {
+        if is_html_client {
+            let mut r = Response::new(Body::empty());
+            *r.status_mut() = StatusCode::SEE_OTHER;
+            r.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/login?error=Invalid+password"));
+            return Ok(r);
+        }
         return json_response(
             StatusCode::UNAUTHORIZED,
             json!({"error":"Invalid password"}),
@@ -285,6 +308,16 @@ fn login(
         );
     }
     let token = auth::create_session_token(state, Map::new())?;
+    if is_html_client {
+        let mut r = Response::new(Body::empty());
+        *r.status_mut() = StatusCode::SEE_OTHER;
+        r.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/dashboard"));
+        r.headers_mut().append(
+            header::SET_COOKIE,
+            auth::session_cookie_header(headers, &token),
+        );
+        return Ok(r);
+    }
     let mut r = json_response(
         StatusCode::OK,
         json!({"success":true,"mustChangePassword":false}),

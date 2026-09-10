@@ -72,15 +72,67 @@ pub async fn handle_oauth(
         "POST" => {
             if sub.ends_with("/refresh") {
                 let connection_id = body.get("connectionId").and_then(Value::as_str).unwrap_or("");
-                if let Some(conn) = state.db.provider_connection(connection_id)? {
-                    let mut updated = conn.clone();
-                    if let Some(obj) = updated.as_object_mut() {
-                        obj.insert("accessToken".into(), json!(format!("refreshed_{}", uuid::Uuid::new_v4())));
-                    }
-                    state.db.update_connection(connection_id, updated)?;
-                    return json_response(StatusCode::OK, json!({ "success": true, "refreshed": true }));
+                let Some(conn) = state.db.provider_connection(connection_id)? else {
+                    return json_response(StatusCode::NOT_FOUND, json!({ "error": "Connection not found" }));
+                };
+                let refresh_token = conn
+                    .get("refreshToken")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if refresh_token.is_empty() {
+                    return json_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({ "error": "No refresh token available for connection" }),
+                    );
                 }
-                return json_response(StatusCode::NOT_FOUND, json!({ "error": "Connection not found" }));
+                let token_url = conn
+                    .get("tokenUrl")
+                    .and_then(Value::as_str)
+                    .unwrap_or("https://oauth2.googleapis.com/token");
+                let client_id = conn.get("clientId").and_then(Value::as_str).unwrap_or("");
+                let client_secret = conn.get("clientSecret").and_then(Value::as_str).unwrap_or("");
+
+                let mut form = vec![
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", refresh_token),
+                ];
+                if !client_id.is_empty() {
+                    form.push(("client_id", client_id));
+                }
+                if !client_secret.is_empty() {
+                    form.push(("client_secret", client_secret));
+                }
+
+                match state.http.post(token_url).form(&form).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let token_data: Value = resp.json().await.unwrap_or(json!({}));
+                        if let Some(new_access) = token_data.get("access_token").and_then(Value::as_str) {
+                            let mut patch = json!({ "accessToken": new_access });
+                            if let Some(new_refresh) = token_data.get("refresh_token").and_then(Value::as_str) {
+                                patch["refreshToken"] = json!(new_refresh);
+                            }
+                            state.db.update_connection(connection_id, patch)?;
+                            return json_response(StatusCode::OK, json!({ "success": true, "refreshed": true }));
+                        }
+                        return json_response(
+                            StatusCode::BAD_GATEWAY,
+                            json!({ "error": "Provider response did not contain access_token", "details": token_data }),
+                        );
+                    }
+                    Ok(resp) => {
+                        let err_text = resp.text().await.unwrap_or_default();
+                        return json_response(
+                            StatusCode::BAD_GATEWAY,
+                            json!({ "error": "Upstream token refresh failed", "details": err_text }),
+                        );
+                    }
+                    Err(e) => {
+                        return json_response(
+                            StatusCode::BAD_GATEWAY,
+                            json!({ "error": format!("Network error refreshing token: {e}") }),
+                        );
+                    }
+                }
             }
 
             if sub.ends_with("/bulk-import")

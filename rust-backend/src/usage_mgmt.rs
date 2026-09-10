@@ -3,9 +3,27 @@ use axum::{
     http::{header, HeaderValue, Method, Response, StatusCode},
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
+
+static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<String>>>> = OnceLock::new();
+
+pub fn get_log_buffer() -> &'static Arc<Mutex<VecDeque<String>>> {
+    LOG_BUFFER.get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(500))))
+}
+
+#[allow(dead_code)]
+pub fn push_log_line(line: String) {
+    let buf = get_log_buffer();
+    if let Ok(mut g) = buf.lock() {
+        if g.len() >= 500 {
+            g.pop_front();
+        }
+        g.push_back(line);
+    }
+}
 
 use crate::{error::AppError, state::AppState};
 
@@ -327,8 +345,18 @@ pub fn handle_translator_console_logs(
     method: &Method,
 ) -> Result<Response<Body>, AppError> {
     match method.as_str() {
-        "GET" => json_response(StatusCode::OK, json!({ "success": true, "logs": [] })),
-        "DELETE" => json_response(StatusCode::OK, json!({ "success": true })),
+        "GET" => {
+            let buf = get_log_buffer();
+            let logs: Vec<String> = buf.lock().map(|g| g.iter().cloned().collect()).unwrap_or_default();
+            json_response(StatusCode::OK, json!({ "success": true, "logs": logs }))
+        }
+        "DELETE" => {
+            let buf = get_log_buffer();
+            if let Ok(mut g) = buf.lock() {
+                g.clear();
+            }
+            json_response(StatusCode::OK, json!({ "success": true }))
+        }
         _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
     }
 }
@@ -339,7 +367,10 @@ pub fn handle_translator_console_stream(
     if method != Method::GET {
         return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
     }
-    let mut resp = Response::new(Body::from("data: {\"type\":\"init\",\"logs\":[]}\n\n"));
+    let buf = get_log_buffer();
+    let logs: Vec<String> = buf.lock().map(|g| g.iter().cloned().collect()).unwrap_or_default();
+    let payload = format!("data: {}\n\n", serde_json::to_string(&json!({"type": "init", "logs": logs}))?);
+    let mut resp = Response::new(Body::from(payload));
     *resp.status_mut() = StatusCode::OK;
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
