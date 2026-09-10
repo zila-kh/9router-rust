@@ -200,24 +200,89 @@ pub fn handle_usage_connection(
     }
 }
 
-pub fn handle_usage_codex_reset(
+pub async fn handle_usage_codex_reset(
     state: &AppState,
     method: &Method,
     connection_id: &str,
 ) -> Result<Response<Body>, AppError> {
     let conn = state.db.provider_connection(connection_id)?;
-    if conn.is_none() {
+    let Some(conn) = conn else {
         return json_response(StatusCode::NOT_FOUND, json!({"error": "Connection not found"}));
+    };
+    let provider = conn.get("provider").and_then(Value::as_str).unwrap_or("");
+    if provider != "codex" {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "Codex reset credits are only available for Codex connections."}),
+        );
     }
+    let token = conn.get("accessToken").and_then(Value::as_str).unwrap_or("");
+    if token.is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "Codex connection has no valid accessToken"}),
+        );
+    }
+
     match method.as_str() {
-        "GET" => json_response(
-            StatusCode::OK,
-            json!({ "credits": 0, "resetAvailable": false }),
-        ),
-        "POST" => json_response(
-            StatusCode::OK,
-            json!({ "code": "success", "reset": true, "redeemRequestId": uuid::Uuid::new_v4().to_string() }),
-        ),
+        "GET" => {
+            match state
+                .http
+                .get("https://chatgpt.com/backend-api/whitelisted_reset_credits")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let data: Value = resp
+                        .json()
+                        .await
+                        .unwrap_or(json!({ "credits": 0, "resetAvailable": false }));
+                    json_response(StatusCode::OK, data)
+                }
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    json_response(
+                        StatusCode::OK,
+                        json!({ "credits": 0, "resetAvailable": false, "upstreamStatus": status }),
+                    )
+                }
+                Err(e) => json_response(
+                    StatusCode::BAD_GATEWAY,
+                    json!({ "error": format!("Failed to query reset credits: {e}") }),
+                ),
+            }
+        }
+        "POST" => {
+            let redeem_id = uuid::Uuid::new_v4().to_string();
+            match state
+                .http
+                .post("https://chatgpt.com/backend-api/whitelisted_reset_credits/redeem")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .json(&json!({ "redeemRequestId": redeem_id }))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let data: Value = resp
+                        .json()
+                        .await
+                        .unwrap_or(json!({ "code": "success", "reset": true, "redeemRequestId": redeem_id }));
+                    json_response(StatusCode::OK, data)
+                }
+                Ok(resp) => {
+                    let err = resp.text().await.unwrap_or_default();
+                    json_response(
+                        StatusCode::CONFLICT,
+                        json!({ "code": "no_credit", "reset": false, "message": err }),
+                    )
+                }
+                Err(e) => json_response(
+                    StatusCode::BAD_GATEWAY,
+                    json!({ "error": format!("Upstream redeem failed: {e}") }),
+                ),
+            }
+        }
         _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
     }
 }

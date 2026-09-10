@@ -103,7 +103,7 @@ pub async fn handle(
     }
     if let Some(conn_id) = path.strip_prefix("/api/usage/") {
         if let Some(sub) = conn_id.strip_suffix("/codex-reset-credits") {
-            return crate::usage_mgmt::handle_usage_codex_reset(&state, &method, sub);
+            return crate::usage_mgmt::handle_usage_codex_reset(&state, &method, sub).await;
         } else if !conn_id.contains('/') {
             return crate::usage_mgmt::handle_usage_connection(&state, &method, conn_id);
         }
@@ -1072,30 +1072,47 @@ async fn dynamic(
             _ => Err(AppError::NotFound(path.into())),
         };
     }
-    if let Some(id) = path.strip_prefix("/api/providers/") {
-        return match method.as_str() {
-            "GET" => {
-                let c = state
-                    .db
-                    .provider_connection(id)?
-                    .ok_or_else(|| AppError::NotFound("provider connection".into()))?;
-                json_response(StatusCode::OK, json!({"connection":c}))
-            }
-            "PATCH" | "PUT" => {
-                let mut c = state.db.update_connection(id, body)?;
-                if let Some(o) = c.as_object_mut() {
-                    for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
-                        o.remove(k);
-                    }
+    if path.starts_with("/api/providers/") {
+        let sub = path.strip_prefix("/api/providers/").unwrap_or("");
+        if sub.ends_with("/models") {
+            let pid = sub.trim_end_matches("/models");
+            return crate::providers_oauth::handle_providers_models(state, method, pid).await;
+        }
+        if sub.ends_with("/test")
+            || sub.ends_with("/test-models")
+            || sub == "test-batch"
+            || sub == "validate"
+            || sub == "suggested-models"
+            || sub == "kilo/free-models"
+        {
+            return crate::providers_oauth::handle_providers_test(state, method, &body).await;
+        }
+        if !sub.contains('/') && !sub.is_empty() {
+            let id = sub;
+            return match method.as_str() {
+                "GET" => {
+                    let c = state
+                        .db
+                        .provider_connection(id)?
+                        .ok_or_else(|| AppError::NotFound("provider connection".into()))?;
+                    json_response(StatusCode::OK, json!({"connection":c}))
                 }
-                json_response(StatusCode::OK, json!({"connection":c}))
-            }
-            "DELETE" => json_response(
-                StatusCode::OK,
-                json!({"success":state.db.delete_connection(id)?}),
-            ),
-            _ => Err(AppError::NotFound(path.into())),
-        };
+                "PATCH" | "PUT" => {
+                    let mut c = state.db.update_connection(id, body)?;
+                    if let Some(o) = c.as_object_mut() {
+                        for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
+                            o.remove(k);
+                        }
+                    }
+                    json_response(StatusCode::OK, json!({"connection":c}))
+                }
+                "DELETE" => json_response(
+                    StatusCode::OK,
+                    json!({"success":state.db.delete_connection(id)?}),
+                ),
+                _ => Err(AppError::NotFound(path.into())),
+            };
+        }
     }
     if let Some(id) = path.strip_prefix("/api/keys/") {
         if method == Method::DELETE {
@@ -1139,16 +1156,6 @@ async fn dynamic(
     }
     if path.starts_with("/api/oauth/") {
         return crate::providers_oauth::handle_oauth(state, method, path, &body).await;
-    }
-    if path.starts_with("/api/providers/") {
-        let sub = path.strip_prefix("/api/providers/").unwrap_or("");
-        if sub.ends_with("/models") {
-            let pid = sub.trim_end_matches("/models");
-            return crate::providers_oauth::handle_providers_models(state, method, pid).await;
-        }
-        if sub.ends_with("/test") || sub.ends_with("/test-models") || sub == "test-batch" || sub == "validate" || sub == "suggested-models" || sub == "kilo/free-models" {
-            return crate::providers_oauth::handle_providers_test(state, method, &body).await;
-        }
     }
     if path.starts_with("/api/provider-nodes/validate") || path.starts_with("/api/proxy-pools/") && path.ends_with("/test") {
         return crate::providers_oauth::handle_providers_test(state, method, &body).await;

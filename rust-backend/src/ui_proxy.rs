@@ -71,22 +71,35 @@ async fn proxy_websocket(
         .await
         .map_err(|e| AppError::Upstream(e.to_string()))?;
 
-    let mut response_bytes = Vec::new();
-    let mut buf = [0u8; 1024];
-    loop {
-        let n = upstream
-            .read(&mut buf)
-            .await
-            .map_err(|e| AppError::Upstream(e.to_string()))?;
-        if n == 0 {
-            return Err(AppError::Upstream(
-                "Upstream closed during WebSocket handshake".into(),
-            ));
+    const MAX_HANDSHAKE_HEADER: usize = 64 * 1024;
+    let handshake = async {
+        let mut response_bytes = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = upstream
+                .read(&mut buf)
+                .await
+                .map_err(|e| AppError::Upstream(e.to_string()))?;
+            if n == 0 {
+                return Err(AppError::Upstream(
+                    "Upstream closed during WebSocket handshake".into(),
+                ));
+            }
+            response_bytes.extend_from_slice(&buf[..n]);
+            if response_bytes.len() > MAX_HANDSHAKE_HEADER {
+                return Err(AppError::Upstream("WebSocket handshake headers exceed 64KB".into()));
+            }
+            if let Some(pos) = response_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                return Ok((response_bytes, pos));
+            }
         }
-        response_bytes.extend_from_slice(&buf[..n]);
-        if let Some(pos) = response_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-            let header_str = String::from_utf8_lossy(&response_bytes[..pos]);
-            let leftover = response_bytes[pos + 4..].to_vec();
+    };
+    let (response_bytes, pos) = tokio::time::timeout(std::time::Duration::from_secs(10), handshake)
+        .await
+        .map_err(|_| AppError::Upstream("WebSocket handshake timed out after 10s".into()))??;
+
+    let header_str = String::from_utf8_lossy(&response_bytes[..pos]);
+    let leftover = response_bytes[pos + 4..].to_vec();
 
             let mut lines = header_str.split("\r\n");
             let status_line = lines.next().unwrap_or("");
@@ -125,9 +138,7 @@ async fn proxy_websocket(
                 }
             });
 
-            return Ok(resp);
-        }
-    }
+            Ok(resp)
 }
 
 async fn proxy(

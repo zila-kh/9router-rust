@@ -92,63 +92,80 @@ pub async fn handle_infra_lifecycle(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if path == "/api/shutdown" || path == "/api/version/shutdown" {
-        return json_response(StatusCode::OK, json!({ "success": true, "message": "Graceful shutdown initiated" }));
+        tokio::spawn(async {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            std::process::exit(0);
+        });
+        return json_response(
+            StatusCode::OK,
+            json!({ "success": true, "message": "Graceful shutdown initiated" }),
+        );
     }
     if path == "/api/version/update" {
-        return json_response(StatusCode::OK, json!({ "success": true, "updated": false, "currentVersion": "1.0.1" }));
+        return json_response(
+            StatusCode::OK,
+            json!({ "success": true, "updated": false, "currentVersion": "1.0.1", "upToDate": true }),
+        );
     }
 
     if path.starts_with("/api/headroom") {
         if method == Method::POST {
-            return json_response(StatusCode::OK, json!({ "status": "started", "running": true }));
+            return json_response(
+                StatusCode::NOT_IMPLEMENTED,
+                json!({ "error": "Headroom daemon not installed on host" }),
+            );
         }
         return json_response(
             StatusCode::OK,
             json!({
-                "status": "running",
-                "running": true,
-                "headroom": { "memoryMb": 512, "cpuPct": 1.2 }
+                "status": "stopped",
+                "running": false,
+                "installed": false,
+                "headroom": null
             }),
         );
     }
 
     if path.starts_with("/api/pxpipe") {
         if method == Method::POST {
-            return json_response(StatusCode::OK, json!({ "status": "reloaded", "success": true }));
+            return json_response(
+                StatusCode::NOT_IMPLEMENTED,
+                json!({ "error": "PXPIPE service not installed on host" }),
+            );
         }
         return json_response(
             StatusCode::OK,
             json!({
-                "status": "active",
-                "running": true,
-                "installed": true
+                "status": "inactive",
+                "running": false,
+                "installed": false
             }),
         );
     }
 
     if path.starts_with("/api/tunnel") {
         if method == Method::POST {
-            let action = body.get("action").and_then(Value::as_str).unwrap_or("start");
-            return json_response(StatusCode::OK, json!({ "success": true, "action": action, "active": true }));
+            return json_response(
+                StatusCode::NOT_IMPLEMENTED,
+                json!({ "error": "Tunnel daemon (tailscale/cloudflared) not configured or installed" }),
+            );
         }
         return json_response(
             StatusCode::OK,
             json!({
-                "enabled": true,
-                "installed": true,
-                "running": true,
-                "tailscale": true
+                "enabled": false,
+                "installed": false,
+                "running": false,
+                "tailscale": false
             }),
         );
     }
 
     if path.starts_with("/api/proxy-pools/") && path.contains("-deploy") {
         return json_response(
-            StatusCode::OK,
+            StatusCode::BAD_REQUEST,
             json!({
-                "success": true,
-                "url": "https://proxy-worker.deploy.internal",
-                "deployed": true
+                "error": "Deploy requires remote worker credentials and target script"
             }),
         );
     }

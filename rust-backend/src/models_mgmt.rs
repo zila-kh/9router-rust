@@ -297,7 +297,7 @@ pub fn handle_models_catalog_sync(
                 StatusCode::OK,
                 json!({
                     "success": true,
-                    "result": { "synced": true, "source": "static-embedded" }
+                    "result": { "synced": false, "source": "static-catalog", "message": "Catalog is embedded at compile time; runtime sync disabled" }
                 }),
             )
         }
@@ -317,33 +317,47 @@ pub async fn handle_models_test(
         Some(m) if !m.is_empty() => m,
         _ => return json_response(StatusCode::BAD_REQUEST, json!({"error": "Model required"})),
     };
-    let kind = body.get("kind").and_then(Value::as_str).unwrap_or("llm");
 
-    let start = std::time::Instant::now();
-    let res = match crate::providers::resolve_model(state, model) {
-        Ok(resolved) => {
-            let latency_ms = start.elapsed().as_millis() as u64;
-            json!({
-                "ok": true,
-                "latencyMs": latency_ms,
-                "error": null,
-                "status": 200,
-                "provider": resolved.provider,
-                "model": resolved.model,
-                "kind": kind
-            })
-        }
-        Err(_) => {
-            let latency_ms = start.elapsed().as_millis() as u64;
-            json!({
-                "ok": false,
-                "latencyMs": latency_ms,
-                "error": format!("Model not found: {model}"),
-                "status": 404
-            })
-        }
+    let ping_payload = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1
+    });
+    let canonical = match crate::translate::normalize_request(ping_payload, crate::translate::Format::OpenAi) {
+        Ok(c) => c,
+        Err(e) => return json_response(StatusCode::BAD_REQUEST, json!({"ok": false, "error": e.to_string()})),
     };
-    json_response(StatusCode::OK, res)
+    let empty_headers = axum::http::HeaderMap::new();
+    let start = std::time::Instant::now();
+    match crate::gateway::execute_target_direct(
+        state,
+        &empty_headers,
+        crate::translate::Format::OpenAi,
+        false,
+        canonical,
+        model,
+    ).await {
+        Ok(resp) => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            let is_success = resp.status().is_success();
+            let status = resp.status().as_u16();
+            json_response(StatusCode::OK, json!({
+                "ok": is_success,
+                "status": status,
+                "latencyMs": latency_ms,
+                "error": if is_success { None } else { Some(format!("Model ping returned status {status}")) }
+            }))
+        }
+        Err(e) => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            json_response(StatusCode::OK, json!({
+                "ok": false,
+                "status": 502,
+                "latencyMs": latency_ms,
+                "error": e.to_string()
+            }))
+        }
+    }
 }
 
 fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, AppError> {
