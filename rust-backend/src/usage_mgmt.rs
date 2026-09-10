@@ -50,7 +50,8 @@ pub fn handle_usage_chart(
     }
 
     let data = state.db.get_chart_data(period)?;
-    json_response(StatusCode::OK, data)
+    let chart_array = data.get("chart").cloned().unwrap_or(json!([]));
+    json_response(StatusCode::OK, chart_array)
 }
 
 pub fn handle_usage_providers(
