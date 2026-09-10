@@ -8,7 +8,7 @@ Backend-only Rust port overlay for the existing 9Router Next/React UI.
 - Pinned source snapshot: `eb712ca821f0ba6bc41043fbd14494c5af5daba5` (`0.5.69`)
 - Port version: `1.0.1`
 - UI: existing Next/React UI, unchanged except two UI-only guards applied by the installer
-- Public listener: Rust (`:20128` by default)
+- Public listener: Rust (`:20130` by default)
 - Internal UI listener: Next (`127.0.0.1:20129` in strict mode)
 - Existing SQLite DB: `~/.9router/db/data.sqlite`
 

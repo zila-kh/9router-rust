@@ -59,7 +59,7 @@ pub async fn handle_cli_tools(
         "GET" => {
             let config = state.db.kv_get("cli_settings", &scope)?.unwrap_or(json!({
                 "enabled": true,
-                "port": 20128,
+                "port": 20130,
                 "host": "127.0.0.1"
             }));
             json_response(StatusCode::OK, json!({ "settings": config }))

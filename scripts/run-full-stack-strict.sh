@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRONTEND_DIR="${NINEROUTER_FRONTEND_DIR:-$ROOT/frontend}"
-PUBLIC_PORT="${PORT:-20128}"
+PUBLIC_PORT="${PORT:-20130}"
 UI_PORT="${NINEROUTER_UI_PORT:-20129}"
 UI_HOST="127.0.0.1"
 RUST_BIN="${NINEROUTER_RUST_BIN:-$ROOT/rust-backend/target/release/9router-rust}"

@@ -25,7 +25,7 @@ impl Config {
         let port = env::var("PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
-            .unwrap_or(20128);
+            .unwrap_or(20130);
         let data_dir = env::var_os("NINEROUTER_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(default_data_dir);

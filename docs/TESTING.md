@@ -17,9 +17,9 @@ Then run strict mode:
 Check:
 
 ```bash
-curl -i http://127.0.0.1:20128/api/health
-curl -i http://127.0.0.1:20128/api/version
-curl -i http://127.0.0.1:20128/api/rust/parity
+curl -i http://127.0.0.1:20130/api/health
+curl -i http://127.0.0.1:20130/api/version
+curl -i http://127.0.0.1:20130/api/rust/parity
 ```
 
 Dashboard/authenticated endpoints may require the dashboard session cookie. Remote `/v1/*` requests require a configured 9Router API key according to the current settings.
@@ -29,7 +29,7 @@ Dashboard/authenticated endpoints may require the dashboard session cookie. Remo
 Use a model/account already stored in `~/.9router/db/data.sqlite`:
 
 ```bash
-curl -i http://127.0.0.1:20128/v1/chat/completions \
+curl -i http://127.0.0.1:20130/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_9ROUTER_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"model":"PROVIDER/MODEL","messages":[{"role":"user","content":"reply with ok"}]}'

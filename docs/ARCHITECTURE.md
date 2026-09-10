@@ -6,7 +6,7 @@
 browser / CLI / SDK
         |
         v
-Rust public listener :20128
+Rust public listener :20130
   |-- /api/*        -> Rust management/auth/DB/system services
   |-- /v1/*         -> Rust gateway
   |-- /v1beta/*     -> Rust Gemini compatibility

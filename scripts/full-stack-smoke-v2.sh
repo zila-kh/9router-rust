@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="${1:-http://127.0.0.1:20128}"
+BASE="${1:-http://127.0.0.1:20130}"
 PASSWORD="${NINEROUTER_TEST_PASSWORD:-123456}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

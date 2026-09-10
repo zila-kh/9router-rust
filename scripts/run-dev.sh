@@ -7,7 +7,7 @@ command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
 export NINEROUTER_UI_ONLY=1
 export NINEROUTER_UI_ORIGIN=${NINEROUTER_UI_ORIGIN:-http://127.0.0.1:20129}
 export NINEROUTER_HOST=${NINEROUTER_HOST:-127.0.0.1}
-export PORT=${PORT:-20128}
+export PORT=${PORT:-20130}
 cleanup(){ jobs -p | xargs -r kill 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 test -d frontend/node_modules || npm --prefix frontend ci
