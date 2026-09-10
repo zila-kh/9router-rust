@@ -335,6 +335,60 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
             .find(|v| v.get("name").and_then(Value::as_str) == Some(name)))
     }
 
+    pub fn combo_by_id(&self, id: &str) -> Result<Option<Value>, AppError> {
+        Ok(self
+            .combos()?
+            .into_iter()
+            .find(|v| v.get("id").and_then(Value::as_str) == Some(id)))
+    }
+
+    /// Partial update by id. Returns `None` when the combo does not exist.
+    /// Field semantics mirror the upstream route: absent fields keep their
+    /// current value, and an empty/absent `kind` is stored as NULL.
+    pub fn update_combo(&self, id: &str, body: Value) -> Result<Option<Value>, AppError> {
+        let Some(existing) = self.combo_by_id(id)? else {
+            return Ok(None);
+        };
+        let o = body
+            .as_object()
+            .ok_or_else(|| AppError::BadRequest("combo must be object".into()))?;
+        let name = o
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                existing
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        let models = o
+            .get("models")
+            .cloned()
+            .or_else(|| existing.get("models").cloned())
+            .unwrap_or_else(|| json!([]));
+        let kind: Option<String> = match o.get("kind") {
+            None => existing
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            Some(Value::Null) => None,
+            Some(v) => v.as_str().filter(|k| !k.is_empty()).map(str::to_string),
+        };
+        let now = Utc::now().to_rfc3339();
+        let models_s = serde_json::to_string(&models)?;
+        self.with_conn(|db| {
+            db.execute(
+                "UPDATE combos SET name=?2,kind=?3,models=?4,updatedAt=?5 WHERE id=?1",
+                params![id, name, kind, models_s, now],
+            )?;
+            Ok(())
+        })?;
+        self.combo_by_id(id)
+    }
+
     pub fn upsert_combo(&self, body: Value) -> Result<Value, AppError> {
         let o = body
             .as_object()
@@ -344,7 +398,11 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::BadRequest("name required".into()))?;
         let models = o.get("models").cloned().unwrap_or_else(|| json!([]));
-        let kind = o.get("kind").and_then(Value::as_str).unwrap_or("fallback");
+        let kind = o
+            .get("kind")
+            .and_then(Value::as_str)
+            .filter(|k| !k.is_empty())
+            .map(str::to_string);
         let id = o
             .get("id")
             .and_then(Value::as_str)
@@ -1131,7 +1189,7 @@ pub fn merge_settings_defaults(mut raw: Value) -> Value {
       "requireLogin":true,"requireApiKey":true,"tunnelDashboardAccess":true,"authMode":"password","ssoType":"oidc","oidcIssuerUrl":"","oidcClientId":"","oidcClientSecret":"","oidcScopes":"openid profile email","oidcLoginLabel":"Sign in with OIDC",
       "samlEntryPoint":"","samlIssuer":"urn:9router:sp","samlCert":"","samlLoginLabel":"Sign in with SAML SSO","samlAttributeEmail":"email","samlAttributeName":"name",
       "enableObservability":false,"observabilityMaxRecords":1000,"observabilityBatchSize":20,"observabilityFlushIntervalMs":5000,"observabilityMaxJsonSize":5,
-      "outboundProxyEnabled":false,"outboundProxyUrl":"","outboundNoProxy":"","mitmRouterBaseUrl":"http://localhost:20128","dnsToolEnabled":{},"rtkEnabled":true,
+      "outboundProxyEnabled":false,"outboundProxyUrl":"","outboundNoProxy":"","mitmRouterBaseUrl":"http://localhost:20130","dnsToolEnabled":{},"rtkEnabled":true,
       "headroomEnabled":false,"headroomUrl":"http://localhost:8787","headroomCompressUserMessages":false,"headroomTimeoutMs":3000,
       "cavemanEnabled":false,"cavemanLevel":"full","ponytailEnabled":false,"ponytailLevel":"full","pxpipeEnabled":false,"pxpipeAutoInstall":true,"pxpipeMinChars":25000,"pxpipeTimeoutMs":15000
     });

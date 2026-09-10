@@ -5,6 +5,7 @@ use axum::{
     extract::ConnectInfo,
     http::{header, HeaderMap, HeaderValue, Method, Request, Response, StatusCode},
 };
+use once_cell::sync::Lazy;
 use serde_json::{json, Map, Value};
 
 use crate::{auth, error::AppError, providers, state::AppState};
@@ -236,10 +237,7 @@ async fn dispatch(
         ("GET", "/api/combos") => {
             json_response(StatusCode::OK, json!({"combos":state.db.combos()?}))
         }
-        ("POST", "/api/combos") => {
-            let c = state.db.upsert_combo(body)?;
-            json_response(StatusCode::CREATED, json!({"combo":c}))
-        }
+        ("POST", "/api/combos") => combos_post(state, body),
         ("GET", "/api/models") => models_get(state),
         ("PUT", "/api/models") => model_legacy_alias(state, body),
         ("POST", "/api/models/alias") | ("PUT", "/api/models/alias") => model_alias(state, body),
@@ -269,6 +267,46 @@ async fn dispatch(
         ("POST", "/api/translator/translate") => translator_translate(state, body),
         _ => dynamic(state, method, path, body).await,
     }
+}
+
+/// Combo names accept letters, numbers, `-`, `_` and `.` only (upstream rule).
+static COMBO_NAME_RE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"^[a-zA-Z0-9_.\-]+$").expect("combo name regex"));
+
+const COMBO_NAME_CHARSET_ERROR: &str = "Name can only contain letters, numbers, -, _ and .";
+const COMBO_NAME_TAKEN_ERROR: &str = "Combo name already exists";
+
+fn validate_combo_name(name: &str) -> Result<(), AppError> {
+    if !COMBO_NAME_RE.is_match(name) {
+        return Err(AppError::BadRequest(COMBO_NAME_CHARSET_ERROR.into()));
+    }
+    Ok(())
+}
+
+/// Rejects a name already owned by a different combo (`self_id` = combo being renamed).
+fn ensure_combo_name_available(
+    state: &AppState,
+    name: &str,
+    self_id: Option<&str>,
+) -> Result<(), AppError> {
+    if let Some(existing) = state.db.combo_by_name(name)? {
+        if existing.get("id").and_then(Value::as_str) != self_id {
+            return Err(AppError::BadRequest(COMBO_NAME_TAKEN_ERROR.into()));
+        }
+    }
+    Ok(())
+}
+
+fn combos_post(state: &AppState, body: Value) -> Result<Response<Body>, AppError> {
+    let name = body
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::BadRequest("Name is required".into()))?;
+    validate_combo_name(name)?;
+    ensure_combo_name_available(state, name, None)?;
+    let c = state.db.upsert_combo(body)?;
+    // Upstream returns the created row at the top level (media pages read `created.id`).
+    json_response(StatusCode::CREATED, c)
 }
 
 fn login(
@@ -1123,12 +1161,27 @@ async fn dynamic(
         }
     }
     if let Some(id) = path.strip_prefix("/api/combos/") {
-        if method == Method::DELETE {
-            return json_response(
+        return match method.as_str() {
+            "GET" => match state.db.combo_by_id(id)? {
+                Some(c) => json_response(StatusCode::OK, c),
+                None => Err(AppError::NotFound("Combo not found".into())),
+            },
+            "PUT" | "PATCH" => {
+                if let Some(name) = body.get("name").and_then(Value::as_str) {
+                    validate_combo_name(name)?;
+                    ensure_combo_name_available(state, name, Some(id))?;
+                }
+                match state.db.update_combo(id, body)? {
+                    Some(c) => json_response(StatusCode::OK, c),
+                    None => Err(AppError::NotFound("Combo not found".into())),
+                }
+            }
+            "DELETE" => json_response(
                 StatusCode::OK,
                 json!({"success":state.db.delete_combo(id)?}),
-            );
-        }
+            ),
+            _ => Err(AppError::NotFound(path.into())),
+        };
     }
     if let Some(alias) = path.strip_prefix("/api/models/alias/") {
         if method == Method::DELETE {
