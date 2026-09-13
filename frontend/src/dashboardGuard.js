@@ -129,7 +129,11 @@ function isPublicLlmApi(pathname) {
 
 function isLocalOnlyPath(pathname) {
   const normalized = String(pathname || "").replace(/\/+$/, "") || "/";
-  if (LOCAL_ONLY_PATHS.some((prefix) => normalized.startsWith(prefix))) return true;
+  const matchesStaticPath = LOCAL_ONLY_PATHS.some((prefix) => {
+    const root = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+    return normalized === root || normalized.startsWith(prefix);
+  });
+  if (matchesStaticPath) return true;
 
   const match = normalized.match(/^\/api\/oauth\/([^/]+)\/([^/]+)$/);
   if (!match) return false;
