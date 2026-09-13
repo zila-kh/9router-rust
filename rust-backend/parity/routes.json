@@ -23,6 +23,7 @@
     "api/health/route.js",
     "api/init/route.js",
     "api/version/route.js",
+    "api/locale/route.js",
     "api/settings/require-login/route.js",
     "api/auth/login/route.js",
     "api/auth/logout/route.js",
