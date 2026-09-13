@@ -202,7 +202,7 @@ fn is_public_management_request(method: &Method, path: &str) -> bool {
         (method.as_str(), path),
         ("GET", "/api/init")
             | ("GET", "/api/version")
-            | ("GET", "/api/locale")
+            | ("POST", "/api/locale")
             | ("GET", "/api/settings/require-login")
             | ("POST", "/api/auth/login")
             | ("POST", "/api/auth/logout")
@@ -317,6 +317,14 @@ mod tests {
         assert!(is_public_management_request(
             &Method::POST,
             "/api/auth/saml/acs"
+        ));
+        assert!(is_public_management_request(
+            &Method::POST,
+            "/api/locale"
+        ));
+        assert!(!is_public_management_request(
+            &Method::GET,
+            "/api/locale"
         ));
         assert!(!is_public_management_request(
             &Method::POST,
