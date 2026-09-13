@@ -81,6 +81,8 @@ overlays = {
     overlay_root / "src" / "dashboardGuard.js": root / "src" / "dashboardGuard.js",
     overlay_root / "src" / "app" / "api" / "auth" / "login" / "route.js":
         root / "src" / "app" / "api" / "auth" / "login" / "route.js",
+    overlay_root / "src" / "app" / "api" / "settings" / "route.js":
+        root / "src" / "app" / "api" / "settings" / "route.js",
 }
 for source, target in overlays.items():
     if not source.is_file():
