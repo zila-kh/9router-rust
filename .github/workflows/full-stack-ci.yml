@@ -119,7 +119,7 @@ jobs:
       - name: Native parity report
         env:
           NINEROUTER_ALLOW_PARITY_GAPS: "1"
-        run: bash scripts/release-gate.sh .
+        run: node scripts/audit-parity.mjs
       - name: Dump logs on failure
         if: failure()
         run: |
