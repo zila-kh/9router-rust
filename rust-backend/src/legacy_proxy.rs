@@ -39,10 +39,7 @@ pub async fn proxy_buffered(
         }
     }
     if let Ok(v) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
-        out_headers.insert(
-            reqwest::header::HeaderName::from_static("x-9r-real-ip"),
-            v,
-        );
+        out_headers.insert(reqwest::header::HeaderName::from_static("x-9r-real-ip"), v);
     }
     out_headers.insert(
         reqwest::header::HeaderName::from_static("x-9r-rust-legacy-bridge"),
