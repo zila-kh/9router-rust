@@ -1,10 +1,10 @@
 use crate::{
-    compat_proxy, error::AppError, gateway, management, media, state::AppState, ui_proxy,
+    auth, compat_proxy, error::AppError, gateway, management, media, state::AppState, ui_proxy,
 };
 use axum::{
     body::{to_bytes, Body},
     extract::{ConnectInfo, State},
-    http::{header, HeaderMap, Method, Request, Response},
+    http::{Method, Request, Response},
     response::IntoResponse,
     Router,
 };
@@ -52,37 +52,49 @@ async fn handle_management(
     peer: SocketAddr,
     request: Request<Body>,
 ) -> Result<Response<Body>, AppError> {
-    if !state.config.compat_api_enabled {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+
+    // Compatibility mode deliberately prefers the pinned upstream route handlers
+    // for dashboard APIs. This restores exact response shapes and newly added
+    // endpoints while the native Rust implementations continue to mature. The
+    // small security/auth allow-list remains Rust-owned in every mode.
+    if !state.config.compat_api_enabled || native_in_compat_mode(&method, &path) {
         return management::handle(state, ConnectInfo(peer), request).await;
     }
 
     let (parts, body) = request.into_parts();
+    if !public_compat_path(&path) {
+        auth::require_dashboard(&state, &parts.headers)?;
+    }
+
     let method = parts.method.clone();
     let uri = parts.uri.clone();
     let headers = parts.headers.clone();
     let raw = to_bytes(body, MAX_API_BODY)
         .await
         .map_err(|error| AppError::BadRequest(format!("API request body: {error}")))?;
-    let native_request = Request::from_parts(parts, Body::from(raw.clone()));
 
-    match management::handle(state.clone(), ConnectInfo(peer), native_request).await {
-        Err(AppError::NotFound(_)) => {
-            compat_proxy::proxy_buffered(&state, peer, &method, &uri, &headers, raw).await
-        }
-        Err(AppError::BadRequest(_)) if should_retry_non_json(&method, &headers) => {
-            compat_proxy::proxy_buffered(&state, peer, &method, &uri, &headers, raw).await
-        }
-        other => other,
-    }
+    compat_proxy::proxy_buffered(&state, peer, &method, &uri, &headers, raw).await
 }
 
-fn should_retry_non_json(method: &Method, headers: &HeaderMap) -> bool {
-    if method != Method::POST && method != Method::PUT && method != Method::PATCH {
-        return false;
-    }
-    !headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_ascii_lowercase().starts_with("application/json"))
-        .unwrap_or(false)
+fn native_in_compat_mode(method: &Method, path: &str) -> bool {
+    matches!(
+        (method.as_str(), path),
+        ("GET", "/api/health")
+            | ("GET", "/api/rust/parity")
+            | ("GET", "/api/settings/require-login")
+            | ("POST", "/api/auth/login")
+            | ("POST", "/api/auth/logout")
+            | ("GET", "/api/auth/status")
+            | ("POST", "/api/auth/reset-password")
+    )
+}
+
+fn public_compat_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/health" | "/api/init" | "/api/version" | "/api/tags"
+    ) || path.starts_with("/api/auth/oidc")
+        || path.starts_with("/api/auth/saml")
 }
