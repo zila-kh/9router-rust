@@ -169,6 +169,21 @@ case "$video_status" in
 esac
 ! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
 
+# Exercise the actual web-fetch handler with deliberately invalid JSON. A 400
+# from upstream proves Rust routed the authenticated request to compatibility
+# code without making an external network request.
+web_fetch_status="$(curl --silent --show-error \
+  "${LLM_AUTH[@]}" \
+  --header 'content-type: application/json' \
+  --data '{' \
+  --dump-header "$TMP/web-fetch.headers" \
+  --output "$TMP/web-fetch.body" \
+  --write-out '%{http_code}' \
+  "$BASE/v1/web/fetch")"
+[[ "$web_fetch_status" == 400 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/web-fetch.headers"
+grep -qi 'Invalid JSON body' "$TMP/web-fetch.body"
+
 # A standards-compliant CORS preflight may be answered by Axum's outer CorsLayer
 # with HTTP 200 or by the compatibility handler itself with HTTP 204. Validate the
 # actual browser contract rather than coupling the smoke test to one middleware.
@@ -179,7 +194,7 @@ web_preflight_status="$(curl --silent --show-error \
   --dump-header "$TMP/web-preflight.headers" \
   --output "$TMP/web-preflight.body" \
   --write-out '%{http_code}' \
-  "$BASE/v1/web")"
+  "$BASE/v1/web/fetch")"
 case "$web_preflight_status" in
   200|204) ;;
   *)
@@ -189,7 +204,7 @@ case "$web_preflight_status" in
     ;;
 esac
 grep -qi '^access-control-allow-origin:[[:space:]]*\*' "$TMP/web-preflight.headers"
-grep -Eqi '^access-control-allow-methods:.*POST' "$TMP/web-preflight.headers"
+grep -Eqi '^access-control-allow-methods:[[:space:]]*(\*|.*POST)' "$TMP/web-preflight.headers"
 
 # The internal Next listener must reject the same API request without Rust's secret.
 if [[ -n "$UI_ORIGIN" ]]; then
