@@ -6,7 +6,9 @@ command -v cargo >/dev/null || { echo 'error: cargo not found' >&2; exit 127; }
 command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
 command -v node >/dev/null || { echo 'error: node not found' >&2; exit 127; }
 python3 ./scripts/static-audit.py
-bash -n ./scripts/run-dev.sh ./scripts/run-prod.sh ./scripts/materialize-frontend.sh
+for script in ./scripts/run-dev.sh ./scripts/run-prod.sh ./scripts/materialize-frontend.sh; do
+  bash -n "$script"
+done
 if PORT=0 bash ./scripts/run-prod.sh . >/dev/null 2>&1; then
   echo 'error: production launcher accepted PORT=0' >&2
   exit 1
