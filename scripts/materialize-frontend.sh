@@ -59,14 +59,7 @@ lines = [line for line in lines if not any(token in line for token in blocked)]
 layout.write_text('\n'.join(lines) + '\n', encoding="utf-8")
 
 instrumentation = root / "src/instrumentation.js"
-text = instrumentation.read_text(encoding="utf-8")
-guard = '  if (process.env.NINEROUTER_UI_ONLY === "1") return;\n'
-if guard not in text:
-    needle = 'export async function register() {\n'
-    if needle not in text:
-        raise SystemExit("instrumentation.js shape changed; refusing an unsafe patch")
-    text = text.replace(needle, needle + guard, 1)
-instrumentation.write_text(text, encoding="utf-8")
+instrumentation.write_text('''export async function register() {\n  if (\n    process.env.NINEROUTER_UI_ONLY === "1" &&\n    process.env.NINEROUTER_COMPAT_API !== "1"\n  ) {\n    return;\n  }\n  if (process.env.NEXT_RUNTIME === "nodejs") {\n    // The vendored layout intentionally omits backend side-effect imports. Bring\n    // them back only when Rust has enabled the secured compatibility API.\n    if (process.env.NINEROUTER_COMPAT_API === "1") {\n      await import("@/lib/network/initOutboundProxy");\n      await import("@/shared/services/bootstrap");\n    }\n\n    const { initConsoleLogCapture } = await import("@/lib/consoleLogBuffer");\n    initConsoleLogCapture();\n\n    // Server-only: lets capabilities.js read the synced catalog without pulling\n    // node:fs into the dashboard's browser bundle.\n    const { installCatalogSource } = await import("open-sse/providers/catalogOverride.js");\n    await installCatalogSource();\n\n    const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");\n    startModelCatalogSync();\n  }\n}\n''', encoding="utf-8")
 
 next_config = root / "next.config.mjs"
 text = next_config.read_text(encoding="utf-8")
