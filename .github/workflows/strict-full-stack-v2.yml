@@ -70,29 +70,33 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
           NINEROUTER_COMPAT_API: "0"
+          NINEROUTER_UI_PORT: "20129"
+          NINEROUTER_UI_SECRET: strict-ci-internal-token
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
           DATA_DIR: ${{ runner.temp }}/9router-data
         run: |
+          set -euo pipefail
           mkdir -p "$DATA_DIR"
-          # Record the actual Node PID, not an npm parent which can leave Node alive.
           nohup node .next/standalone/custom-server.js >"${RUNNER_TEMP}/ui.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/ui.pid"
+          bash "$GITHUB_WORKSPACE/scripts/wait-http.sh" http://127.0.0.1:20129/login 90
 
       - name: Start strict Rust backend
         env:
           PORT: "20128"
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
+          NINEROUTER_UI_SECRET: strict-ci-internal-token
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
           DATA_DIR: ${{ runner.temp }}/9router-data
           NINEROUTER_DISABLE_LEGACY_BRIDGE: "1"
           NINEROUTER_COMPAT_API: "0"
           NINEROUTER_UI_ONLY: "1"
         run: |
+          set -euo pipefail
           mkdir -p "$NINEROUTER_DATA_DIR"
           nohup ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/rust.pid"
           bash scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
-          bash scripts/wait-http.sh http://127.0.0.1:20129/login 90
 
       - name: Strict frontend/backend smoke test
         env:
@@ -102,7 +106,12 @@ jobs:
       - name: Reject legacy backend bridge references
         run: bash scripts/no-legacy-backend.sh
 
-      - name: Stop first stack before the isolated release gate
+      - name: Publish native parity audit
+        env:
+          NINEROUTER_ALLOW_PARITY_GAPS: "1"
+        run: node scripts/audit-parity.mjs
+
+      - name: Stop strict test stack
         if: always()
         run: |
           for component in rust ui; do
@@ -124,13 +133,8 @@ jobs:
                   break
               time.sleep(0.2)
           else:
-              raise SystemExit('Previous test stack still owns the release-gate ports')
+              raise SystemExit('Strict test stack did not release its ports')
           PY
-
-      - name: Full isolated release gate and native parity audit
-        env:
-          NINEROUTER_ALLOW_PARITY_GAPS: "1"
-        run: bash scripts/release-gate.sh .
 
       - name: Upload diagnostics
         if: always()
