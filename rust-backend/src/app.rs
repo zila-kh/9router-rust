@@ -318,14 +318,8 @@ mod tests {
             &Method::POST,
             "/api/auth/saml/acs"
         ));
-        assert!(is_public_management_request(
-            &Method::POST,
-            "/api/locale"
-        ));
-        assert!(!is_public_management_request(
-            &Method::GET,
-            "/api/locale"
-        ));
+        assert!(is_public_management_request(&Method::POST, "/api/locale"));
+        assert!(!is_public_management_request(&Method::GET, "/api/locale"));
         assert!(!is_public_management_request(
             &Method::POST,
             "/api/auth/oidc/test"
