@@ -3,6 +3,7 @@ set -euo pipefail
 
 BASE="${1:-http://127.0.0.1:20128}"
 UI_ORIGIN="${NINEROUTER_UI_ORIGIN:-}"
+PASSWORD="${NINEROUTER_TEST_PASSWORD:-123456}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -14,6 +15,7 @@ request() {
 }
 
 request health "$BASE/api/health"
+grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' "$TMP/health.body"
 grep -Eq '"runtime"[[:space:]]*:[[:space:]]*"rust"' "$TMP/health.body"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/health.headers"
 
@@ -21,32 +23,33 @@ request login_page "$BASE/login"
 grep -Eqi '<!doctype html|<html' "$TMP/login_page.body"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/login_page.headers"
 
-# Authenticate through Rust. CI calls from loopback, where the pinned application
-# deliberately permits the initial password until it is changed.
+# Authenticate through Rust before exercising the internal compatibility API.
 curl --silent --show-error --fail-with-body \
   --cookie-jar "$TMP/cookies" \
   --header 'content-type: application/json' \
-  --data '{"password":"123456"}' \
+  --data "$(printf '{\"password\":\"%s\"}' "$PASSWORD")" \
   --dump-header "$TMP/login.headers" \
   --output "$TMP/login.body" \
   "$BASE/api/auth/login"
 grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$TMP/login.body"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/login.headers"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/login.headers"
 
 request auth_status --cookie "$TMP/cookies" "$BASE/api/auth/status"
 grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*true' "$TMP/auth_status.body"
-! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/auth_status.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/auth_status.headers"
 
+# Existing dashboard APIs use the exact pinned-upstream response contract in
+# compatibility mode, even when a partial native implementation exists.
 request settings --cookie "$TMP/cookies" "$BASE/api/settings"
-! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/settings.headers"
-
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/settings.headers"
 request providers --cookie "$TMP/cookies" "$BASE/api/providers"
 grep -Eq '"connections"[[:space:]]*:' "$TMP/providers.body"
-! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/providers.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/providers.headers"
 
-# /api/tags is intentionally not implemented natively yet. It proves that an
-# authenticated public request can reach the retained upstream handler only via Rust.
-request tags --cookie "$TMP/cookies" "$BASE/api/tags"
+# /api/tags is not native. It proves that a public compatibility endpoint can
+# reach the retained upstream handler only through the Rust listener.
+request tags "$BASE/api/tags"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags.headers"
 grep -Eq '^[[:space:]]*\[' "$TMP/tags.body"
 
