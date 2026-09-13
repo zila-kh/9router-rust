@@ -1,6 +1,7 @@
 use crate::{error::AppError, state::AppState};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
+use std::collections::{HashSet, VecDeque};
 
 fn resolve_env_placeholders_with<F>(value: &mut Value, lookup: &F)
 where
@@ -147,20 +148,61 @@ pub fn canonical_provider(id: &str) -> String {
 }
 
 pub fn resolve_model(state: &AppState, requested: &str) -> Result<ResolvedModel, AppError> {
-    let (explicit, model) = split_model(requested);
-    if let Some(p) = explicit {
-        return resolve_for_provider(state, p, requested, model);
-    }
-    if let Some(target) = state
-        .db
-        .kv_get("modelAliases", requested)?
-        .and_then(|v| v.as_str().map(str::to_string))
-    {
-        return resolve_model(state, &target);
-    }
     let aliases = state.db.kv_all("modelAliases")?;
-    if let Some((target, _)) = aliases.iter().find(|(_, v)| v.as_str() == Some(requested)) {
-        return resolve_model(state, target);
+    let mut queue = VecDeque::from([requested.to_string()]);
+    let mut visited = HashSet::new();
+    let mut traversed_alias = false;
+
+    while let Some(candidate) = queue.pop_front() {
+        if !visited.insert(candidate.clone()) {
+            continue;
+        }
+        if visited.len() > 64 {
+            return Err(AppError::BadRequest(
+                "model alias graph exceeds the maximum depth".into(),
+            ));
+        }
+
+        match resolve_unaliased(state, &candidate) {
+            Ok(mut resolved) => {
+                resolved.requested = requested.to_string();
+                return Ok(resolved);
+            }
+            Err(AppError::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+
+        if let Some(target) = aliases
+            .get(&candidate)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            traversed_alias = true;
+            queue.push_back(target);
+        }
+        for (key, value) in &aliases {
+            if value.as_str() == Some(candidate.as_str()) {
+                traversed_alias = true;
+                queue.push_back(key.clone());
+            }
+        }
+    }
+
+    if traversed_alias {
+        Err(AppError::BadRequest(format!(
+            "model alias graph for {requested} is cyclic or does not resolve to an active model"
+        )))
+    } else {
+        Err(AppError::NotFound(format!(
+            "no active provider for model {requested}"
+        )))
+    }
+}
+
+fn resolve_unaliased(state: &AppState, requested: &str) -> Result<ResolvedModel, AppError> {
+    let (explicit, model) = split_model(requested);
+    if let Some(provider) = explicit {
+        return resolve_for_provider(state, provider, requested, model);
     }
     let inferred = if requested.starts_with("claude-") {
         Some("anthropic")
@@ -177,41 +219,41 @@ pub fn resolve_model(state: &AppState, requested: &str) -> Result<ResolvedModel,
     } else {
         None
     };
-    if let Some(p) = inferred {
-        if let Ok(r) = resolve_for_provider(state, p, requested, model) {
-            return Ok(r);
+    if let Some(provider) = inferred {
+        if let Ok(resolved) = resolve_for_provider(state, provider, requested, model) {
+            return Ok(resolved);
         }
     }
     let active = state.db.provider_connections(None, Some(true))?;
-    for c in &active {
-        if c.get("defaultModel").and_then(Value::as_str) == Some(requested) {
-            let p = c
+    for connection in &active {
+        if connection.get("defaultModel").and_then(Value::as_str) == Some(requested) {
+            let provider = connection
                 .get("provider")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             return Ok(ResolvedModel {
                 requested: requested.into(),
-                provider: p.into(),
+                provider: provider.into(),
                 model: model.into(),
-                connection: c.clone(),
+                connection: connection.clone(),
             });
         }
     }
     let mut candidates = Vec::new();
     if let Some(entries) = CATALOG.get("registry").and_then(Value::as_array) {
-        for e in entries {
-            let p = e.get("id").and_then(Value::as_str).unwrap_or_default();
-            if models_for(p)
+        for entry in entries {
+            let provider = entry.get("id").and_then(Value::as_str).unwrap_or_default();
+            if models_for(provider)
                 .iter()
-                .any(|m| m.get("id").and_then(Value::as_str) == Some(model))
+                .any(|candidate| candidate.get("id").and_then(Value::as_str) == Some(model))
             {
-                candidates.push(p)
+                candidates.push(provider);
             }
         }
     }
-    for p in candidates {
-        if let Ok(r) = resolve_for_provider(state, p, requested, model) {
-            return Ok(r);
+    for provider in candidates {
+        if let Ok(resolved) = resolve_for_provider(state, provider, requested, model) {
+            return Ok(resolved);
         }
     }
     Err(AppError::NotFound(format!(

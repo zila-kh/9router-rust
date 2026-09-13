@@ -353,7 +353,11 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
         let now = Utc::now().to_rfc3339();
         let models_s = serde_json::to_string(&models)?;
         self.with_conn(|db|{ db.execute("INSERT INTO combos(id,name,kind,models,createdAt,updatedAt) VALUES(?1,?2,?3,?4,?5,?5) ON CONFLICT(name) DO UPDATE SET kind=excluded.kind,models=excluded.models,updatedAt=excluded.updatedAt",params![id,name,kind,models_s,now])?; Ok(())})?;
-        Ok(json!({"id":id,"name":name,"kind":kind,"models":models,"createdAt":now,"updatedAt":now}))
+        self.combo_by_name(name)?.ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!(
+                "combo upsert succeeded but row was not found"
+            ))
+        })
     }
 
     pub fn provider_node(&self, id: &str) -> Result<Option<Value>, AppError> {
@@ -883,11 +887,11 @@ fn counter_add(
     }
 }
 fn mask_key(key: Option<&str>) -> Option<String> {
-    key.map(|k| {
-        if k.len() <= 8 {
-            format!("{}***", k.chars().next().unwrap_or('*'))
+    key.map(|key| {
+        if key.chars().count() <= 8 {
+            format!("{}***", key.chars().next().unwrap_or('*'))
         } else {
-            format!("{}***", &k[..8])
+            format!("{}***", key.chars().take(8).collect::<String>())
         }
     })
 }

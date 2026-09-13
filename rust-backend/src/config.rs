@@ -42,8 +42,7 @@ impl Config {
             .unwrap_or_else(|| data_dir.join("db").join("data.sqlite"));
         let ui_origin = validate_loopback_origin(
             "NINEROUTER_UI_ORIGIN",
-            env::var("NINEROUTER_UI_ORIGIN")
-                .unwrap_or_else(|_| "http://127.0.0.1:20129".into()),
+            env::var("NINEROUTER_UI_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:20129".into()),
         )?;
         let upstream_timeout_secs = match env::var("NINEROUTER_UPSTREAM_TIMEOUT_SECS") {
             Ok(value) => value.parse::<u64>().with_context(|| {

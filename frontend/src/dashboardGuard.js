@@ -27,8 +27,11 @@ const PUBLIC_API_PATHS = [
   "/api/auth/login",
   "/api/auth/logout",
   "/api/auth/status",
-  "/api/auth/oidc",
-  "/api/auth/saml",
+  "/api/auth/oidc/start",
+  "/api/auth/oidc/callback",
+  "/api/auth/saml/start",
+  "/api/auth/saml/acs",
+  "/api/auth/saml/metadata",
   "/api/version",
   "/api/settings/require-login",
 ];
@@ -70,21 +73,17 @@ const PROTECTED_API_PATHS = [
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.
 const LOCAL_ONLY_PATHS = [
-  "/api/cli-tools/cowork-settings",
-  "/api/cli-tools/antigravity-mitm",
+  "/api/cli-tools/",
   "/api/mcp/",
-  "/api/tunnel/tailscale-install",
-  "/api/tunnel/tailscale-enable",
-  "/api/tunnel/tailscale-disable",
-  "/api/tunnel/tailscale-check",
-  "/api/tunnel/enable",
-  "/api/tunnel/disable",
+  "/api/tunnel/",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
   "/api/auth/reset-password",
-  "/api/headroom/start",
-  "/api/headroom/stop",
-  "/api/headroom/proxy",
+  "/api/headroom/",
+  "/api/pxpipe/",
+  "/api/shutdown",
+  "/api/version/shutdown",
+  "/api/version/update",
 ];
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -138,7 +137,10 @@ function isPublicLlmApi(pathname) {
 
 function extractApiKey(request) {
   const authHeader = request.headers.get("Authorization");
-  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  if (authHeader) {
+    const match = authHeader.trim().match(/^Bearer\s+(\S+)$/i);
+    if (match) return match[1];
+  }
   const apiKeyHeader = request.headers.get("x-api-key");
   if (apiKeyHeader) return apiKeyHeader;
   const googleApiKeyHeader = request.headers.get("x-goog-api-key");
@@ -188,7 +190,7 @@ async function isAuthenticated(request) {
 
 function isPublicApi(pathname) {
   if (isPublicLlmApi(pathname)) return true;
-  return PUBLIC_API_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  return PUBLIC_API_PATHS.includes(pathname);
 }
 
 export const __test__ = {

@@ -65,6 +65,21 @@ async fn proxy(
                 | "transfer-encoding"
                 | "upgrade"
                 | "content-length"
+                | "forwarded"
+                | "x-forwarded-for"
+                | "x-forwarded-host"
+                | "x-forwarded-proto"
+                | "x-real-ip"
+                | "cf-connecting-ip"
+                | "true-client-ip"
+                | "x-client-ip"
+                | "x-cluster-client-ip"
+                | "x-9router-ui-secret"
+                | "x-9r-rust-compat"
+                | "x-9r-ui-proxy"
+                | "x-9r-real-ip"
+                | "x-9r-peer-token"
+                | "x-9r-via-proxy"
         ) {
             continue;
         }
@@ -83,14 +98,21 @@ async fn proxy(
             );
         }
     }
-    if !h.contains_key(reqwest::header::HeaderName::from_static(
-        "x-forwarded-proto",
-    )) {
-        h.insert(
-            reqwest::header::HeaderName::from_static("x-forwarded-proto"),
-            reqwest::header::HeaderValue::from_static("http"),
-        );
-    }
+    let forwarded_proto = if auth::is_loopback(peer)
+        && parts
+            .headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+    {
+        "https"
+    } else {
+        "http"
+    };
+    h.insert(
+        reqwest::header::HeaderName::from_static("x-forwarded-proto"),
+        reqwest::header::HeaderValue::from_static(forwarded_proto),
+    );
     if let Ok(v) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
         h.insert(
             reqwest::header::HeaderName::from_static("x-9r-real-ip"),
@@ -103,7 +125,7 @@ async fn proxy(
     }
     h.insert(
         reqwest::header::HeaderName::from_static("x-9r-ui-proxy"),
-        reqwest::header::HeaderValue::from_static("rust-1.0.1"),
+        reqwest::header::HeaderValue::from_static(concat!("rust-", env!("CARGO_PKG_VERSION"))),
     );
     rb = rb.headers(h);
     let r = rb.send().await.map_err(|e| {

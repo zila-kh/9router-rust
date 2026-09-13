@@ -130,10 +130,7 @@ async fn embedding_once(
         } else {
             "embedContent"
         };
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/{model_path}:{op}?key={}",
-            url::form_urlencoded::byte_serialize(key.as_bytes()).collect::<String>()
-        );
+        let url = format!("https://generativelanguage.googleapis.com/v1beta/{model_path}:{op}");
         let request_body = if let Some(items) = input.as_array() {
             json!({"requests": items.iter().map(|x| {
                 let mut v=json!({"model":model_path,"content":{"parts":[{"text":scalar_text(x)}]}});
@@ -147,7 +144,14 @@ async fn embedding_once(
             }
             v
         };
-        (url, request_body, HeaderMap::new())
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-goog-api-key"),
+            HeaderValue::from_str(&key).map_err(|error| {
+                AppError::BadRequest(format!("invalid Gemini API key: {error}"))
+            })?,
+        );
+        (url, request_body, headers)
     } else {
         let (url, _) = providers::endpoint(provider, conn, "embedding", model)?;
         let mut out = json!({

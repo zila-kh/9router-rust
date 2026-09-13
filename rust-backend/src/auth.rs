@@ -364,12 +364,18 @@ mod tests {
             header::AUTHORIZATION,
             HeaderValue::from_static("bearer test-token"),
         );
-        assert_eq!(extract_api_key(&headers, None).as_deref(), Some("test-token"));
+        assert_eq!(
+            extract_api_key(&headers, None).as_deref(),
+            Some("test-token")
+        );
 
         headers.remove(header::AUTHORIZATION);
         headers.insert("x-api-key", HeaderValue::from_static("  key-123  "));
         assert_eq!(extract_api_key(&headers, None).as_deref(), Some("key-123"));
-        assert_eq!(extract_api_key(&HeaderMap::new(), Some("  query-key ")).as_deref(), Some("query-key"));
+        assert_eq!(
+            extract_api_key(&HeaderMap::new(), Some("  query-key ")).as_deref(),
+            Some("query-key")
+        );
     }
 
     #[test]

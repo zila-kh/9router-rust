@@ -28,7 +28,8 @@ pub async fn proxy_buffered(
     let mut out_headers = reqwest::header::HeaderMap::new();
     for (k, v) in headers {
         let name = k.as_str().to_ascii_lowercase();
-        if is_hop(&name) || name == "host" || name == "content-length" {
+        if is_hop(&name) || is_internal_header(&name) || name == "host" || name == "content-length"
+        {
             continue;
         }
         if let (Ok(n), Ok(v)) = (
@@ -43,7 +44,7 @@ pub async fn proxy_buffered(
     }
     out_headers.insert(
         reqwest::header::HeaderName::from_static("x-9r-rust-legacy-bridge"),
-        reqwest::header::HeaderValue::from_static("1.0.1"),
+        reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
     let response = state
         .proxy_http
@@ -82,6 +83,18 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
             dst.append(k, v);
         }
     }
+}
+
+fn is_internal_header(name: &str) -> bool {
+    matches!(
+        name,
+        "x-9router-ui-secret"
+            | "x-9r-rust-compat"
+            | "x-9r-ui-proxy"
+            | "x-9r-real-ip"
+            | "x-9r-peer-token"
+            | "x-9r-via-proxy"
+    )
 }
 
 fn is_hop(name: &str) -> bool {

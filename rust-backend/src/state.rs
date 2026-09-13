@@ -24,10 +24,7 @@ impl AppState {
             .pool_max_idle_per_host(32)
             .http2_adaptive_window(true)
             .redirect(Policy::none())
-            .user_agent(concat!(
-                "9router-rust-proxy/",
-                env!("CARGO_PKG_VERSION")
-            ))
+            .user_agent(concat!("9router-rust-proxy/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {
             config: Arc::new(config),

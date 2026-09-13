@@ -107,8 +107,12 @@ fn is_public(path: &str) -> bool {
             | "/api/auth/logout"
             | "/api/auth/status"
             | "/api/settings/require-login"
-    ) || path.starts_with("/api/auth/oidc")
-        || path.starts_with("/api/auth/saml")
+            | "/api/auth/oidc/start"
+            | "/api/auth/oidc/callback"
+            | "/api/auth/saml/start"
+            | "/api/auth/saml/acs"
+            | "/api/auth/saml/metadata"
+    )
 }
 
 async fn dispatch(
@@ -122,15 +126,15 @@ async fn dispatch(
     match (method.as_str(), path) {
         ("GET", "/api/health") => json_response(
             StatusCode::OK,
-            json!({"status":"ok","version":"1.0.1","runtime":"rust","upstreamSnapshot":"eb712ca821f0ba6bc41043fbd14494c5af5daba5"}),
+            json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"runtime":"rust","upstreamSnapshot":"17c4cc76877bd1755030a8414f8d0083f48dcccf"}),
         ),
         ("GET", "/api/init") => json_response(
             StatusCode::OK,
-            json!({"initialized":true,"runtime":"rust","version":"1.0.1"}),
+            json!({"initialized":true,"runtime":"rust","version":env!("CARGO_PKG_VERSION")}),
         ),
         ("GET", "/api/version") => json_response(
             StatusCode::OK,
-            json!({"version":"1.0.1","name":"9router-rust","rustBackend":true,"upstreamVersion":"0.5.69"}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"name":"9router-rust","rustBackend":true,"upstreamVersion":"0.5.75"}),
         ),
         ("GET", "/api/rust/parity") => json_response(
             StatusCode::OK,
@@ -146,7 +150,7 @@ async fn dispatch(
         ("POST", "/api/auth/login") => login(state, peer, headers, body),
         ("POST", "/api/auth/logout") => logout(),
         ("GET", "/api/auth/status") => auth_status(state, headers),
-        ("POST", "/api/auth/reset-password") => reset_password(state, peer),
+        ("POST", "/api/auth/reset-password") => reset_password(state, peer, headers),
         ("GET", "/api/settings") => settings_get(state),
         ("PATCH", "/api/settings") | ("PUT", "/api/settings") => settings_update(state, body),
         ("GET", "/api/settings/database") => settings_database_get(state, headers),
@@ -201,8 +205,11 @@ fn login(
         .get("password")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty());
-    let env_initial = std::env::var("INITIAL_PASSWORD").ok();
-    if stored.is_none() && env_initial.is_none() && !auth::is_loopback(peer) {
+    let env_initial = std::env::var("INITIAL_PASSWORD")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if stored.is_none() && env_initial.is_none() && !auth::is_direct_loopback_request(peer, headers)
+    {
         return json_response(
             StatusCode::FORBIDDEN,
             json!({"success":false,"error":"Default password must be changed before remote access. Change it from the local machine (or set INITIAL_PASSWORD).","mustChangePassword":true}),
@@ -256,8 +263,12 @@ fn auth_status(state: &AppState, headers: &HeaderMap) -> Result<Response<Body>, 
     )
 }
 
-fn reset_password(state: &AppState, peer: SocketAddr) -> Result<Response<Body>, AppError> {
-    if !auth::is_loopback(peer) {
+fn reset_password(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, AppError> {
+    if !auth::is_direct_loopback_request(peer, headers) {
         return Err(AppError::Forbidden("Local only".into()));
     }
     state.db.update_settings(json!({"password": null}))?;
@@ -545,12 +556,8 @@ fn settings_update(state: &AppState, mut body: Value) -> Result<Response<Body>, 
 
 fn providers_get(state: &AppState) -> Result<Response<Body>, AppError> {
     let mut cs = state.db.provider_connections(None, None)?;
-    for c in &mut cs {
-        if let Some(o) = c.as_object_mut() {
-            for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
-                o.remove(k);
-            }
-        }
+    for connection in &mut cs {
+        redact_secrets(connection);
     }
     json_response(StatusCode::OK, json!({"connections":cs}))
 }
@@ -576,11 +583,7 @@ fn providers_post(state: &AppState, mut body: Value) -> Result<Response<Body>, A
             .unwrap_or(json!(provider.clone()))
     }
     let mut c = state.db.create_connection(body)?;
-    if let Some(o) = c.as_object_mut() {
-        for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
-            o.remove(k);
-        }
-    }
+    redact_secrets(&mut c);
     json_response(StatusCode::CREATED, json!({"connection":c}))
 }
 
@@ -966,19 +969,16 @@ fn dynamic(
     if let Some(id) = path.strip_prefix("/api/providers/") {
         return match method.as_str() {
             "GET" => {
-                let c = state
+                let mut c = state
                     .db
                     .provider_connection(id)?
                     .ok_or_else(|| AppError::NotFound("provider connection".into()))?;
+                redact_secrets(&mut c);
                 json_response(StatusCode::OK, json!({"connection":c}))
             }
             "PATCH" | "PUT" => {
                 let mut c = state.db.update_connection(id, body)?;
-                if let Some(o) = c.as_object_mut() {
-                    for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
-                        o.remove(k);
-                    }
-                }
+                redact_secrets(&mut c);
                 json_response(StatusCode::OK, json!({"connection":c}))
             }
             "DELETE" => json_response(
@@ -1015,6 +1015,43 @@ fn dynamic(
     Err(AppError::NotFound(format!(
         "Rust API route not implemented: {method} {path}"
     )))
+}
+
+fn redact_secrets(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.retain(|key, _| {
+                !matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "apikey"
+                        | "api_key"
+                        | "accesstoken"
+                        | "refreshtoken"
+                        | "idtoken"
+                        | "authtoken"
+                        | "sessiontoken"
+                        | "accounttoken"
+                        | "password"
+                        | "clientsecret"
+                        | "client_secret"
+                        | "privatekey"
+                        | "private_key"
+                        | "cookie"
+                        | "authorization"
+                        | "token"
+                )
+            });
+            for child in object.values_mut() {
+                redact_secrets(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_secrets(item);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, AppError> {
