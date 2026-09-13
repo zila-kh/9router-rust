@@ -77,7 +77,7 @@ async fn handle_management(
 }
 
 fn should_retry_non_json(method: &Method, headers: &HeaderMap) -> bool {
-    if !matches!(*method, Method::POST | Method::PUT | Method::PATCH) {
+    if method != Method::POST && method != Method::PUT && method != Method::PATCH {
         return false;
     }
     !headers
