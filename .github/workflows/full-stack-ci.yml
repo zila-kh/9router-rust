@@ -60,7 +60,7 @@ jobs:
           NINEROUTER_UI_SECRET: ci-internal-route-token
         run: npm run build
 
-  strict-integration:
+  compat-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     needs: [rust-backend, pinned-frontend]
@@ -94,16 +94,18 @@ jobs:
           NINEROUTER_COMPAT_API: "1"
           NINEROUTER_UI_SECRET: ci-internal-route-token
           NINEROUTER_DISABLE_LEGACY_BRIDGE: "1"
+          INITIAL_PASSWORD: compat-ci-password
           NEXT_TELEMETRY_DISABLED: "1"
         run: |
           set -euo pipefail
           mkdir -p "$NINEROUTER_DATA_DIR"
           (cd frontend && npm run start:ui >"${RUNNER_TEMP}/ui.log" 2>&1 & echo $! >"${RUNNER_TEMP}/ui.pid")
-          ./rust-backend/target/release/nine-router-rs >"${RUNNER_TEMP}/rust.log" 2>&1 & echo $! >"${RUNNER_TEMP}/rust.pid"
+          ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 & echo $! >"${RUNNER_TEMP}/rust.pid"
           ./scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
       - name: Smoke test Rust and UI
         env:
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
+          NINEROUTER_TEST_PASSWORD: compat-ci-password
         run: ./scripts/full-stack-smoke.sh http://127.0.0.1:20128
       - name: Native parity report
         env:
