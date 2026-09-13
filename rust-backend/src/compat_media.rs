@@ -10,6 +10,11 @@ use crate::{auth, compat_proxy, error::AppError, state::AppState};
 const MAX_BODY: usize = 128 * 1024 * 1024;
 
 pub fn is_path(path: &str) -> bool {
+    let without_api_prefix = path.strip_prefix("/api").unwrap_or(path);
+    if without_api_prefix == "/v1/v1" || without_api_prefix.starts_with("/v1/v1/") {
+        return true;
+    }
+
     let path = normalize_public_path(path);
     matches!(
         path.as_str(),
@@ -118,6 +123,8 @@ mod tests {
             "/v1",
             "/api/v1",
             "/v1/v1",
+            "/v1/v1/audio/speech",
+            "/api/v1/v1/images/generations",
             "/v1/api/chat",
             "/v1/audio/voices",
             "/v1/messages/count_tokens",
