@@ -84,6 +84,26 @@ if [[ -n "$CLI_TOKEN" ]]; then
   grep -Eq '^[[:space:]]*\[' "$TMP/tags_cli.body"
 fi
 
+# Upstream 0.5.75 added public video APIs. A fresh database has no xAI account, so
+# the expected response is an upstream validation/credential error, not Rust's old
+# 404/501 "media route not implemented" response.
+video_status="$(curl --silent --show-error \
+  --header 'content-type: application/json' \
+  --data '{}' \
+  --dump-header "$TMP/video.headers" \
+  --output "$TMP/video.body" \
+  --write-out '%{http_code}' \
+  "$BASE/v1/videos/generations")"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/video.headers"
+case "$video_status" in
+  404|421|501)
+    echo "Video compatibility route was not reached (HTTP $video_status)" >&2
+    cat "$TMP/video.body" >&2
+    exit 1
+    ;;
+esac
+! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
+
 # The internal Next listener must reject the same API request without Rust's secret.
 if [[ -n "$UI_ORIGIN" ]]; then
   direct_status="$(curl --silent --show-error --output "$TMP/direct.body" --write-out '%{http_code}' "$UI_ORIGIN/api/tags" || true)"
