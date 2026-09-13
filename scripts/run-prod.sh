@@ -27,6 +27,14 @@ export NINEROUTER_DISABLE_LEGACY_BRIDGE=1
 export NEXT_TELEMETRY_DISABLED=${NEXT_TELEMETRY_DISABLED:-1}
 unset NINEROUTER_LEGACY_BACKEND_ORIGIN LEGACY_BACKEND_ORIGIN
 
+case "$NINEROUTER_HOST" in
+  0.0.0.0) PUBLIC_READY_HOST=127.0.0.1 ;;
+  ::) PUBLIC_READY_HOST='[::1]' ;;
+  *:*) PUBLIC_READY_HOST="[$NINEROUTER_HOST]" ;;
+  *) PUBLIC_READY_HOST="$NINEROUTER_HOST" ;;
+esac
+PUBLIC_BASE_URL="http://${PUBLIC_READY_HOST}:${PORT}"
+
 if [[ -n "${NINEROUTER_DATA_DIR:-}" && -n "${DATA_DIR:-}" && "$NINEROUTER_DATA_DIR" != "$DATA_DIR" ]]; then
   echo 'error: NINEROUTER_DATA_DIR and DATA_DIR must point to the same directory' >&2
   exit 2
@@ -123,7 +131,7 @@ wait_ready "internal Next UI" "$NINEROUTER_UI_ORIGIN/login" "$ui_pid" 90
 
 rust-backend/target/release/9router-rust &
 rust_pid=$!
-wait_ready "Rust backend" "http://${NINEROUTER_HOST}:${PORT}/api/health" "$rust_pid" 90
+wait_ready "Rust backend" "$PUBLIC_BASE_URL/api/health" "$rust_pid" 90
 
-printf '9Router is ready at http://%s:%s/dashboard\n' "$NINEROUTER_HOST" "$PORT"
+printf '9Router is ready at %s/dashboard\n' "$PUBLIC_BASE_URL"
 monitor_stack
