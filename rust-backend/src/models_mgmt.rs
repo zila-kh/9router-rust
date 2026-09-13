@@ -123,7 +123,7 @@ pub fn handle_models_disabled(
                 })
                 .unwrap_or_default();
 
-            if provider_alias.is_empty() || !body.get("ids").map_or(false, Value::is_array) {
+            if provider_alias.is_empty() || !body.get("ids").is_some_and(Value::is_array) {
                 return json_response(
                     StatusCode::BAD_REQUEST,
                     json!({ "error": "providerAlias and ids[] required" }),
@@ -183,11 +183,10 @@ pub fn handle_models_availability(
                 let mut lock_count = 0;
                 if let Some(obj) = conn.as_object() {
                     for (k, v) in obj {
-                        if k.starts_with(MODEL_LOCK_PREFIX) {
+                        if let Some(model_suffix) = k.strip_prefix(MODEL_LOCK_PREFIX) {
                             if let Some(until_str) = v.as_str() {
                                 if let Ok(until_dt) = DateTime::parse_from_rfc3339(until_str) {
                                     if until_dt.with_timezone(&Utc) > now {
-                                        let model_suffix = &k[MODEL_LOCK_PREFIX.len()..];
                                         let model = if model_suffix.is_empty() {
                                             "__all"
                                         } else {

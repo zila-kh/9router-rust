@@ -6,48 +6,6 @@ use serde_json::{json, Value};
 
 use crate::{error::AppError, state::AppState};
 
-#[cfg(test)]
-mod sso_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn excluded_sso_never_issues_credentials() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = crate::db::Db::open(&dir.path().join("sso.sqlite")).unwrap();
-        let state = AppState::new(crate::config::Config::from_env().unwrap(), db).unwrap();
-        for path in [
-            "/api/auth/oidc/start",
-            "/api/auth/oidc/callback",
-            "/api/auth/oidc/test",
-            "/api/auth/saml/acs",
-            "/api/auth/saml/start",
-            "/api/auth/saml/test",
-            "/api/auth/saml/metadata",
-        ] {
-            for method in [Method::GET, Method::POST] {
-                let response = handle_oidc_saml(
-                    &state,
-                    &method,
-                    path,
-                    &json!({"email":"attacker@example.invalid"}),
-                )
-                .await
-                .unwrap();
-                assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
-                assert!(!response.headers().contains_key(header::SET_COOKIE));
-                let bytes = axum::body::to_bytes(response.into_body(), 4096)
-                    .await
-                    .unwrap();
-                let body: Value = serde_json::from_slice(&bytes).unwrap();
-                assert_eq!(body["code"], "SSO_DISABLED");
-                assert!(body.get("token").is_none());
-                assert!(body.get("authenticated").is_none());
-            }
-        }
-        assert!(state.db.kv_all("enterprise_sessions").unwrap().is_empty());
-    }
-}
-
 pub async fn handle_cli_tools(
     state: &AppState,
     method: &Method,
@@ -223,4 +181,46 @@ fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, App
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(r)
+}
+
+#[cfg(test)]
+mod sso_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn excluded_sso_never_issues_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(&dir.path().join("sso.sqlite")).unwrap();
+        let state = AppState::new(crate::config::Config::from_env().unwrap(), db).unwrap();
+        for path in [
+            "/api/auth/oidc/start",
+            "/api/auth/oidc/callback",
+            "/api/auth/oidc/test",
+            "/api/auth/saml/acs",
+            "/api/auth/saml/start",
+            "/api/auth/saml/test",
+            "/api/auth/saml/metadata",
+        ] {
+            for method in [Method::GET, Method::POST] {
+                let response = handle_oidc_saml(
+                    &state,
+                    &method,
+                    path,
+                    &json!({"email":"attacker@example.invalid"}),
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+                assert!(!response.headers().contains_key(header::SET_COOKIE));
+                let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(body["code"], "SSO_DISABLED");
+                assert!(body.get("token").is_none());
+                assert!(body.get("authenticated").is_none());
+            }
+        }
+        assert!(state.db.kv_all("enterprise_sessions").unwrap().is_empty());
+    }
 }
