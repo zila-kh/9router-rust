@@ -12,12 +12,12 @@ Rust remains the only public listener. For dashboard `/api/**` requests it:
 
 1. keeps health, login, logout, session status, password reset, and parity reporting native;
 2. mirrors upstream public, protected, always-protected, and local-only route gates;
-3. validates the dashboard session before protected requests reach the internal server;
+3. validates dashboard sessions and upstream-compatible `x-9r-cli-token` credentials before protected requests reach the internal server;
 4. delegates other dashboard APIs to the pinned upstream handlers so current pages retain their exact response contracts;
 5. injects a private `x-9router-ui-secret` header;
 6. labels delegated responses `x-9router-runtime: upstream-compat`.
 
-The Next server rejects backend paths without the matching secret. `/v1`, `/v1beta`, `/responses`, and `/codex` remain Rust-owned and are never compatibility-forwarded. Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls additionally require a direct loopback request; always-protected update, shutdown, database, and auto-import operations require a valid session even when normal dashboard login is disabled.
+The Next server rejects backend paths without the matching secret. `/v1`, `/v1beta`, `/responses`, and `/codex` remain Rust-owned and are never compatibility-forwarded. Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse-proxy hop from being mistaken for a local user. Always-protected update, shutdown, database, and auto-import operations require a valid dashboard session or CLI token even when normal dashboard login is disabled.
 
 Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. This mode restores broad dashboard functionality while the native port continues.
 
@@ -32,7 +32,8 @@ Strict mode is the only mode that should be used to claim native parity.
 Core pieces include:
 
 - Rust public HTTP server and loopback Next UI reverse proxy;
-- dashboard password session/auth gate and API-key gate;
+- dashboard password sessions, upstream `x-9r-cli-token` validation, and API-key gates;
+- public/protected/always-protected/local-only route classification with origin and forwarded-peer checks;
 - existing SQLite schema/settings/connections/API keys/combos/KV/provider nodes/proxy pools/usage rows;
 - provider/model catalog exported from the pinned upstream source;
 - `/v1/models`, chat/completions, Claude messages, Responses, and Gemini compatibility paths;
