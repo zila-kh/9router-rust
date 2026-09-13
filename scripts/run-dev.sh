@@ -2,13 +2,22 @@
 set -Eeuo pipefail
 ROOT=${1:-.}
 cd "$ROOT"
-for command in cargo npm node python3 curl; do
+for command in cargo npm node python3 curl git; do
   command -v "$command" >/dev/null || { echo "error: $command not found" >&2; exit 127; }
 done
 
 UI_PORT=${NINEROUTER_UI_PORT:-20129}
 if [[ ! "$UI_PORT" =~ ^[0-9]+$ ]] || (( 10#$UI_PORT < 1 || 10#$UI_PORT > 65535 )); then
   echo "error: invalid NINEROUTER_UI_PORT: $UI_PORT" >&2
+  exit 2
+fi
+APP_PORT=${PORT:-20128}
+if [[ ! "$APP_PORT" =~ ^[0-9]+$ ]] || (( 10#$APP_PORT < 1 || 10#$APP_PORT > 65535 )); then
+  echo "error: invalid PORT: $APP_PORT" >&2
+  exit 2
+fi
+if (( 10#$APP_PORT == 10#$UI_PORT )); then
+  echo "error: PORT and NINEROUTER_UI_PORT must be different" >&2
   exit 2
 fi
 EXPECTED_UI_ORIGIN="http://127.0.0.1:${UI_PORT}"
@@ -22,7 +31,7 @@ export NINEROUTER_COMPAT_API=${NINEROUTER_COMPAT_API:-1}
 export NINEROUTER_UI_PORT="$UI_PORT"
 export NINEROUTER_UI_ORIGIN="$EXPECTED_UI_ORIGIN"
 export NINEROUTER_HOST=${NINEROUTER_HOST:-127.0.0.1}
-export PORT=${PORT:-20128}
+export PORT="$APP_PORT"
 export NINEROUTER_DISABLE_LEGACY_BRIDGE=1
 export NEXT_TELEMETRY_DISABLED=${NEXT_TELEMETRY_DISABLED:-1}
 unset NINEROUTER_LEGACY_BACKEND_ORIGIN LEGACY_BACKEND_ORIGIN
