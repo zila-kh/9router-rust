@@ -14,6 +14,16 @@ export PORT=${PORT:-20128}
 export NINEROUTER_DISABLE_LEGACY_BRIDGE=1
 unset NINEROUTER_LEGACY_BACKEND_ORIGIN LEGACY_BACKEND_ORIGIN
 
+if [[ -n "${NINEROUTER_DATA_DIR:-}" && -n "${DATA_DIR:-}" && "$NINEROUTER_DATA_DIR" != "$DATA_DIR" ]]; then
+  echo 'error: NINEROUTER_DATA_DIR and DATA_DIR must point to the same directory' >&2
+  exit 2
+fi
+if [[ -n "${NINEROUTER_DATA_DIR:-}" ]]; then
+  export DATA_DIR="$NINEROUTER_DATA_DIR"
+elif [[ -n "${DATA_DIR:-}" ]]; then
+  export NINEROUTER_DATA_DIR="$DATA_DIR"
+fi
+
 if [[ -z "${NINEROUTER_UI_SECRET:-}" ]]; then
   NINEROUTER_UI_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
   export NINEROUTER_UI_SECRET
