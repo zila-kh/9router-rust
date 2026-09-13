@@ -136,9 +136,11 @@ async function hasValidApiKey(request) {
 }
 
 async function canAccessPublicLlmApi(request) {
-  if (isLocalRequest(request)) return true;
   if (await hasValidCliToken(request)) return true;
-  return await hasValidApiKey(request);
+  if (await hasValidApiKey(request)) return true;
+  if (!isLocalRequest(request)) return false;
+  const settings = await loadSettings();
+  return settings?.requireApiKey === false;
 }
 
 async function canAccessLocalOnlyRoute(request) {
