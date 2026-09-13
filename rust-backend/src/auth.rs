@@ -39,17 +39,31 @@ pub struct SessionClaims {
 }
 
 pub fn extract_api_key(headers: &HeaderMap, query_key: Option<&str>) -> Option<String> {
-    if let Some(v) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(v) = v.strip_prefix("Bearer ") {
-            return Some(v.to_string());
+    if let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    {
+        let mut parts = value.split_whitespace();
+        if let (Some(scheme), Some(token), None) = (parts.next(), parts.next(), parts.next()) {
+            if scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() {
+                return Some(token.to_string());
+            }
         }
     }
     for name in ["x-api-key", "x-goog-api-key"] {
-        if let Some(v) = headers.get(name).and_then(|v| v.to_str().ok()) {
-            return Some(v.to_string());
+        if let Some(value) = headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
         }
     }
-    query_key.map(str::to_string)
+    query_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 pub fn is_loopback(peer: SocketAddr) -> bool {
@@ -98,8 +112,12 @@ pub fn is_direct_loopback_request(peer: SocketAddr, headers: &HeaderMap) -> bool
 }
 
 fn jwt_secret(state: &AppState) -> Result<Vec<u8>, AppError> {
-    if let Ok(v) = std::env::var("JWT_SECRET") {
-        return Ok(v.into_bytes());
+    if let Ok(value) = std::env::var("JWT_SECRET") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return Ok(value.as_bytes().to_vec());
+        }
+        tracing::warn!("JWT_SECRET is empty; using the persisted generated secret instead");
     }
     let path = state.config.data_dir.join("jwt-secret");
     if let Ok(s) = fs::read_to_string(&path) {
@@ -153,7 +171,10 @@ pub fn verify_session_token(state: &AppState, token: &str) -> bool {
     let Ok(sig) = URL_SAFE_NO_PAD.decode(s) else {
         return false;
     };
-    let Ok(mut mac) = HmacSha256::new_from_slice(&jwt_secret(state).unwrap_or_default()) else {
+    let Ok(secret) = jwt_secret(state) else {
+        return false;
+    };
+    let Ok(mut mac) = HmacSha256::new_from_slice(&secret) else {
         return false;
     };
     mac.update(input.as_bytes());
@@ -265,11 +286,17 @@ pub fn require_llm(
     peer: SocketAddr,
     query_key: Option<&str>,
 ) -> Result<(), AppError> {
-    if is_direct_loopback_request(peer, headers) || has_valid_cli_token(state, headers) {
+    if has_valid_cli_token(state, headers) {
         return Ok(());
     }
     let settings = state.db.settings()?;
-    if settings.get("requireApiKey").and_then(Value::as_bool) == Some(false) {
+    let direct_local = is_direct_loopback_request(peer, headers);
+    let require_key = !direct_local
+        || settings
+            .get("requireApiKey")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+    if !require_key {
         return Ok(());
     }
     let Some(key) = extract_api_key(headers, query_key) else {
@@ -310,7 +337,7 @@ pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
     HeaderValue::from_str(&format!(
         "auth_token={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400{secure}"
     ))
-    .unwrap()
+    .expect("generated session cookie contains only valid header characters")
 }
 
 #[cfg(test)]
@@ -328,6 +355,21 @@ mod tests {
         assert_eq!(token, derive_cli_token("machine-123", "secret-456"));
         assert_ne!(token, derive_cli_token("machine-124", "secret-456"));
         assert_ne!(token, derive_cli_token("machine-123", "secret-457"));
+    }
+
+    #[test]
+    fn api_key_parser_accepts_case_insensitive_bearer_and_trims_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("bearer test-token"),
+        );
+        assert_eq!(extract_api_key(&headers, None).as_deref(), Some("test-token"));
+
+        headers.remove(header::AUTHORIZATION);
+        headers.insert("x-api-key", HeaderValue::from_static("  key-123  "));
+        assert_eq!(extract_api_key(&headers, None).as_deref(), Some("key-123"));
+        assert_eq!(extract_api_key(&HeaderMap::new(), Some("  query-key ")).as_deref(), Some("query-key"));
     }
 
     #[test]
