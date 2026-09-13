@@ -104,6 +104,18 @@ case "$video_status" in
 esac
 ! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
 
+# The exact /v1/web path is handled only by the new public compatibility router.
+# Its preflight proves the route is wired and classified as a Rust backend path.
+web_preflight_status="$(curl --silent --show-error \
+  --request OPTIONS \
+  --dump-header "$TMP/web-preflight.headers" \
+  --output "$TMP/web-preflight.body" \
+  --write-out '%{http_code}' \
+  "$BASE/v1/web")"
+[[ "$web_preflight_status" == 204 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/web-preflight.headers"
+grep -qi '^access-control-allow-origin:[[:space:]]*\*' "$TMP/web-preflight.headers"
+
 # The internal Next listener must reject the same API request without Rust's secret.
 if [[ -n "$UI_ORIGIN" ]]; then
   direct_status="$(curl --silent --show-error --output "$TMP/direct.body" --write-out '%{http_code}' "$UI_ORIGIN/api/tags" || true)"
