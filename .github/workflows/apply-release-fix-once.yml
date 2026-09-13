@@ -26,17 +26,13 @@ jobs:
 
           management = Path("rust-backend/src/management.rs")
           text = management.read_text()
-          old = '''        } else if current_password
-              .as_deref()
-              .is_some_and(|value| !value.is_empty() && value != "123456")
-          {
-              return json_response_no_store(
-                  StatusCode::UNAUTHORIZED,
-                  json!({"error":"Invalid current password"}),
-              );
-          }
-          '''
-          new = '''        } else if let Some(current_password) = current_password
+          start_marker = "        } else if current_password\n"
+          end_marker = "        object.insert(\n"
+          if text.count(start_marker) != 1:
+              raise SystemExit("management password block start did not match exactly once")
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = '''        } else if let Some(current_password) = current_password
               .as_deref()
               .filter(|value| !value.is_empty())
           {
@@ -48,9 +44,7 @@ jobs:
               }
           }
           '''
-          if text.count(old) != 1:
-              raise SystemExit("management password block did not match exactly once")
-          management.write_text(text.replace(old, new))
+          management.write_text(text[:start] + replacement + text[end:])
 
           smoke = Path("scripts/smoke-e2e.sh")
           text = smoke.read_text()
