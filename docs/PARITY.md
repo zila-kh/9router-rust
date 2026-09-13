@@ -17,17 +17,28 @@ Rust remains the only public listener. For dashboard `/api/**` requests it:
 5. injects a private `x-9router-ui-secret` header;
 6. labels delegated responses `x-9router-runtime: upstream-compat`.
 
-The Next server rejects backend paths without the matching secret. Core public model paths for model listing, chat completions, Claude messages, Responses, Gemini, embeddings, audio, images, and Codex remain Rust-owned. Compatibility mode selectively maps the still-unported `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**` families to their pinned upstream `/api/v1/**` handlers. Their responses are marked `x-9router-runtime: upstream-compat` and are never counted as native coverage.
+The Next server rejects backend paths without the matching secret. Native Rust still owns the core chat-completions, Claude messages, Responses, embeddings, speech, transcription, image-generation, and Codex paths. Compatibility mode maps public endpoints whose current upstream contracts are not yet native, including:
 
-Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse-proxy hop from being mistaken for a local user. Always-protected update, shutdown, database, and auto-import operations require a valid dashboard session or CLI token even when normal dashboard login is disabled.
+- `/v1` and the upstream-compatible `/v1/v1` model-list alias;
+- `/v1/models/**` filtering, metadata, and single-model lookup;
+- `/v1/messages/count_tokens`;
+- `/v1/audio/voices`;
+- `/v1/api/chat` Ollama response formatting;
+- `/v1/responses/compact`;
+- `/v1beta/models/**` Gemini listing and native request behavior;
+- `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**`.
 
-Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. Selective public-API compatibility also restores upstream 0.5.75 video generation/status/download/cancel, search, and web-fetch behavior while their native Rust adapters are completed.
+These delegated responses are marked `x-9router-runtime: upstream-compat` and are never counted as native coverage. The audio-voices adapter also authenticates its nested internal voice-catalog request with the per-process secret, so the frontend boundary remains closed to direct callers.
+
+Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse-proxy hop from being mistaken for a local user. Always-protected update, shutdown, database, and auto-import operations require a valid dashboard session or CLI token even when normal dashboard login is disabled. SSO login, callback, assertion-consumer, and metadata endpoints are public, while OIDC/SAML diagnostic test endpoints remain protected.
+
+Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. Selective public-API compatibility also restores current upstream behavior while native Rust adapters are completed.
 
 ### Strict native mode
 
 `NINEROUTER_COMPAT_API=0` and `NINEROUTER_DISABLE_LEGACY_BRIDGE=1` prohibit all fallback behavior. `scripts/run-full-stack-strict.sh` and `scripts/full-stack-smoke-v2.sh` exercise this mode.
 
-Strict mode is the only mode that should be used to claim native parity. In strict mode, unported video, search, and web routes return a Rust error instead of reaching Next.
+Strict mode is the only mode that should be used to claim native parity. In strict mode, every compatibility-only endpoint returns a Rust error or the current native implementation instead of reaching Next.
 
 ## Implemented natively
 
@@ -38,7 +49,7 @@ Core pieces include:
 - public/protected/always-protected/local-only route classification with origin and forwarded-peer checks;
 - existing SQLite schema/settings/connections/API keys/combos/KV/provider nodes/proxy pools/usage rows;
 - provider/model catalog exported from the pinned upstream source;
-- `/v1/models`, chat/completions, Claude messages, Responses, and Gemini compatibility paths;
+- `/v1/models`, chat/completions, Claude messages, Responses, and Gemini compatibility foundations;
 - OpenAI/Claude/Gemini/Responses translation layer;
 - combo fallback and multi-account fallback;
 - generic OpenAI/Claude/Gemini HTTP transports;
@@ -66,6 +77,7 @@ The manifest intentionally declares these classes of non-parity:
 - MCP endpoints;
 - native video generation/status/download/cancel adapters;
 - native search and web-fetch adapters;
+- native model filtering/metadata, token-counting, Ollama, compact-response, voice-listing, and complete Gemini route adapters;
 - remaining specialized media adapters and proxy-pool deployment/test subroutes.
 
 These features are available through the pinned upstream handlers where applicable in compatibility mode, but remain real Rust-port gaps.

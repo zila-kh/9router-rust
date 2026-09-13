@@ -58,6 +58,19 @@ request auth_status --cookie "$TMP/cookies" "$BASE/api/auth/status"
 grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*true' "$TMP/auth_status.body"
 grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/auth_status.headers"
 
+# SSO diagnostics must stay protected even though browser login/callback endpoints
+# are public. This guards against an overly broad /api/auth/{oidc,saml}/ prefix.
+for endpoint in oidc saml; do
+  status="$(curl --silent --show-error \
+    --request POST \
+    --header 'content-type: application/json' \
+    --data '{}' \
+    --output "$TMP/${endpoint}-test-unauth.body" \
+    --write-out '%{http_code}' \
+    "$BASE/api/auth/$endpoint/test")"
+  [[ "$status" == 401 ]]
+done
+
 # Existing dashboard APIs use the exact pinned-upstream response contract in
 # compatibility mode, even when a partial native implementation exists.
 request settings --cookie "$TMP/cookies" "$BASE/api/settings"
@@ -84,6 +97,39 @@ if [[ -n "$CLI_TOKEN" ]]; then
   grep -Eq '^[[:space:]]*\[' "$TMP/tags_cli.body"
 fi
 
+# Non-native public APIs must use upstream's current contracts instead of being
+# swallowed by the broad native /v1 gateway.
+request v1_root "$BASE/v1"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/v1_root.headers"
+grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/v1_root.body"
+
+request v1_double_root "$BASE/v1/v1"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/v1_double_root.headers"
+grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/v1_double_root.body"
+
+request image_models "$BASE/v1/models/image"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/image_models.headers"
+grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/image_models.body"
+
+curl --silent --show-error --fail-with-body \
+  --header 'content-type: application/json' \
+  --data '{"messages":[{"role":"user","content":"hello"}]}' \
+  --dump-header "$TMP/count_tokens.headers" \
+  --output "$TMP/count_tokens.body" \
+  "$BASE/v1/messages/count_tokens"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/count_tokens.headers"
+grep -Eq '"input_tokens"[[:space:]]*:' "$TMP/count_tokens.body"
+
+request gemini_models "$BASE/v1beta/models"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/gemini_models.headers"
+grep -Eq '"models"[[:space:]]*:' "$TMP/gemini_models.body"
+
+# local-device returns an empty list on Linux when macOS/Windows speech tools are
+# unavailable, but still exercises the nested secret-authenticated internal fetch.
+request local_voices "$BASE/v1/audio/voices?provider=local-device"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/local_voices.headers"
+grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/local_voices.body"
+
 # Upstream 0.5.75 added public video APIs. A fresh database has no xAI account, so
 # the expected response is an upstream validation/credential error, not Rust's old
 # 404/501 "media route not implemented" response.
@@ -104,7 +150,7 @@ case "$video_status" in
 esac
 ! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
 
-# The exact /v1/web path is handled only by the new public compatibility router.
+# The exact /v1/web path is handled only by the public compatibility router.
 # Its preflight proves the route is wired and classified as a Rust backend path.
 web_preflight_status="$(curl --silent --show-error \
   --request OPTIONS \

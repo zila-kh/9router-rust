@@ -32,7 +32,16 @@ export async function GET(request) {
 
     const baseUrl = PROVIDER_API[provider](origin);
     const url = lang ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}lang=${encodeURIComponent(lang)}` : baseUrl;
-    const res = await fetch(url, { cache: "no-store" });
+    const internalSecret =
+      process.env.NINEROUTER_UI_ONLY === "1"
+        ? process.env.NINEROUTER_UI_SECRET
+        : "";
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: internalSecret
+        ? { "x-9router-ui-secret": internalSecret }
+        : undefined,
+    });
     const data = await res.json();
     if (!res.ok || data.error) {
       return Response.json(

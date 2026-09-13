@@ -77,6 +77,27 @@ data.setdefault('scripts', {})['dev:ui'] = 'next dev --webpack --hostname 127.0.
 data['scripts']['start:ui'] = 'next start --hostname 127.0.0.1 --port 20129'
 package.write_text(json.dumps(data, indent=2) + '\n', encoding="utf-8")
 
+# /v1/audio/voices delegates to another internal Next API route. In UI-only
+# compatibility mode that nested request must carry the same private Rust secret,
+# otherwise the frontend boundary correctly rejects it with HTTP 421.
+voices_route = root / "src/app/api/v1/audio/voices/route.js"
+voices_text = voices_route.read_text(encoding="utf-8")
+if '"x-9router-ui-secret": internalSecret' not in voices_text:
+    needle = '    const res = await fetch(url, { cache: "no-store" });'
+    replacement = '''    const internalSecret =
+      process.env.NINEROUTER_UI_ONLY === "1"
+        ? process.env.NINEROUTER_UI_SECRET
+        : "";
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: internalSecret
+        ? { "x-9router-ui-secret": internalSecret }
+        : undefined,
+    });'''
+    if needle not in voices_text:
+        raise SystemExit("audio voices route shape changed; refusing an unsafe patch")
+    voices_route.write_text(voices_text.replace(needle, replacement, 1), encoding="utf-8")
+
 (root / ".upstream-commit").write_text(upstream_sha + "\n", encoding="utf-8")
 (root / ".9router-ui-snapshot").write_text(
     "upstream=decolua/9router\n"

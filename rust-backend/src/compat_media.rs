@@ -10,13 +10,24 @@ use crate::{auth, compat_proxy, error::AppError, state::AppState};
 const MAX_BODY: usize = 128 * 1024 * 1024;
 
 pub fn is_path(path: &str) -> bool {
-    let path = path.strip_prefix("/api").unwrap_or(path);
-    path == "/v1/search"
+    let path = normalize_public_path(path);
+    matches!(
+        path.as_str(),
+        "/v1"
+            | "/v1/api/chat"
+            | "/v1/audio/voices"
+            | "/v1/messages/count_tokens"
+            | "/v1/models"
+            | "/v1/responses/compact"
+            | "/v1/search"
+            | "/v1/web"
+            | "/v1/videos"
+            | "/v1beta/models"
+    ) || path.starts_with("/v1/models/")
         || path.starts_with("/v1/search/")
-        || path == "/v1/web"
         || path.starts_with("/v1/web/")
-        || path == "/v1/videos"
         || path.starts_with("/v1/videos/")
+        || path.starts_with("/v1beta/models/")
 }
 
 pub async fn handle(
@@ -45,7 +56,7 @@ pub async fn handle(
     let target_uri = internal_api_uri(&parts.uri)?;
     let raw = to_bytes(body, MAX_BODY)
         .await
-        .map_err(|error| AppError::BadRequest(format!("compatibility media body: {error}")))?;
+        .map_err(|error| AppError::BadRequest(format!("compatibility API body: {error}")))?;
 
     compat_proxy::proxy_buffered(
         &state,
@@ -58,13 +69,19 @@ pub async fn handle(
     .await
 }
 
-fn internal_api_uri(uri: &Uri) -> Result<Uri, AppError> {
-    let path = uri.path();
-    let target_path = if path.starts_with("/api/") {
-        path.to_string()
+fn normalize_public_path(path: &str) -> String {
+    let path = path.strip_prefix("/api").unwrap_or(path);
+    if path == "/v1/v1" {
+        "/v1".to_string()
+    } else if let Some(rest) = path.strip_prefix("/v1/v1/") {
+        format!("/v1/{rest}")
     } else {
-        format!("/api{path}")
-    };
+        path.to_string()
+    }
+}
+
+fn internal_api_uri(uri: &Uri) -> Result<Uri, AppError> {
+    let target_path = format!("/api{}", normalize_public_path(uri.path()));
     let target = match uri.query() {
         Some(query) => format!("{target_path}?{query}"),
         None => target_path,
@@ -96,13 +113,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recognizes_only_upstream_compatibility_media_routes() {
-        assert!(is_path("/v1/videos/generations"));
-        assert!(is_path("/api/v1/videos/job-1"));
-        assert!(is_path("/v1/search"));
-        assert!(is_path("/api/v1/web/fetch"));
-        assert!(!is_path("/v1/videos-extra"));
-        assert!(!is_path("/v1/images/generations"));
+    fn recognizes_all_non_native_public_compatibility_routes() {
+        for path in [
+            "/v1",
+            "/api/v1",
+            "/v1/v1",
+            "/v1/api/chat",
+            "/v1/audio/voices",
+            "/v1/messages/count_tokens",
+            "/v1/models",
+            "/v1/models/info",
+            "/v1/models/image",
+            "/v1/responses/compact",
+            "/v1/search",
+            "/api/v1/web/fetch",
+            "/v1/videos/generations",
+            "/v1beta/models",
+            "/api/v1beta/models/gemini-2.5-flash:generateContent",
+        ] {
+            assert!(is_path(path), "expected compatibility route: {path}");
+        }
+    }
+
+    #[test]
+    fn leaves_native_public_routes_in_rust() {
+        for path in [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses",
+            "/v1/embeddings",
+            "/v1/audio/speech",
+            "/v1/audio/transcriptions",
+            "/v1/images/generations",
+            "/v1/videos-extra",
+        ] {
+            assert!(!is_path(path), "expected native Rust route: {path}");
+        }
     }
 
     #[test]
@@ -117,5 +163,9 @@ mod tests {
         let already_internal = Uri::from_static("/api/v1/search");
         let mapped = internal_api_uri(&already_internal).expect("mapped URI");
         assert_eq!(mapped.to_string(), "/api/v1/search");
+
+        let double_prefix = Uri::from_static("/v1/v1/models/image?active=true");
+        let mapped = internal_api_uri(&double_prefix).expect("mapped URI");
+        assert_eq!(mapped.to_string(), "/api/v1/models/image?active=true");
     }
 }

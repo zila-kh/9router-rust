@@ -7,6 +7,13 @@
     "publicListener": "rust",
     "internalHandler": "pinned Next API routes",
     "publicApiRoutes": [
+      "/v1 and /v1/v1 -> /api/v1",
+      "/v1/models/** -> /api/v1/models/**",
+      "/v1/messages/count_tokens -> /api/v1/messages/count_tokens",
+      "/v1/audio/voices -> /api/v1/audio/voices",
+      "/v1/api/chat -> /api/v1/api/chat",
+      "/v1/responses/compact -> /api/v1/responses/compact",
+      "/v1beta/models/** -> /api/v1beta/models/**",
       "/v1/videos/** -> /api/v1/videos/**",
       "/v1/search/** -> /api/v1/search/**",
       "/v1/web/** -> /api/v1/web/**"
@@ -83,6 +90,7 @@
     "MCP endpoints",
     "video generation/status/download/cancel routes remain compatibility-only",
     "search and web-fetch routes remain compatibility-only",
+    "model filtering/metadata, count-tokens, Ollama chat, compact responses, voice listing, and Gemini-native routes remain compatibility-only",
     "remaining specialized media adapters",
     "proxy-pool deployment/test subroutes remain compatibility-only",
     "Antigravity translator diagnostics use Gemini as the Rust intermediate instead of exposing a separate antigravity format enum"
