@@ -1,9 +1,9 @@
 {
   "workflow": "Strict full-stack v2",
-  "conclusion": "success",
-  "runId": 34732607952,
-  "headSha": "be83533286446be1350668c6087fda2db4b73f91",
-  "runUrl": "https://github.com/zila-kh/9router-rust/actions/runs/34732607952",
-  "completedAt": "2026-09-13T02:20:50.699746+00:00",
-  "strictParity": true
+  "conclusion": "failure",
+  "runId": 34747962934,
+  "headSha": "aec2bfed36d854c7e859c46acd654b34010f6d7f",
+  "runUrl": "https://github.com/zila-kh/9router-rust/actions/runs/34747962934",
+  "completedAt": "2026-09-13T08:37:40.617423+00:00",
+  "strictParity": false
 }
