@@ -41,9 +41,7 @@ impl Config {
         let ui_origin_value = match env::var("NINEROUTER_UI_ORIGIN") {
             Ok(value) => value,
             Err(env::VarError::NotPresent) => "http://127.0.0.1:20129".into(),
-            Err(error) => {
-                return Err(error).context("NINEROUTER_UI_ORIGIN is not valid Unicode")
-            }
+            Err(error) => return Err(error).context("NINEROUTER_UI_ORIGIN is not valid Unicode"),
         };
         let ui_origin = validate_loopback_origin("NINEROUTER_UI_ORIGIN", ui_origin_value)?;
         let upstream_timeout_secs = match env::var("NINEROUTER_UPSTREAM_TIMEOUT_SECS") {
