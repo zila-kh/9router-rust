@@ -12,6 +12,7 @@ use std::net::{IpAddr, SocketAddr};
 
 const MAX_API_BODY: usize = 128 * 1024 * 1024;
 const UPSTREAM_COMMIT: &str = "17c4cc76877bd1755030a8414f8d0083f48dcccf";
+const UPSTREAM_VERSION: &str = "0.5.75";
 
 const ALWAYS_PROTECTED_PREFIXES: &[&str] = &[
     "/api/shutdown",
@@ -88,6 +89,12 @@ async fn handle_management(
             Method::OPTIONS => Ok(health_options()),
             _ => management::handle(state, ConnectInfo(peer), request).await,
         };
+    }
+
+    if !state.config.compat_api_enabled && method == Method::GET {
+        if let Some(response) = strict_metadata_response(&path) {
+            return Ok(response);
+        }
     }
 
     // Compatibility mode deliberately prefers the pinned upstream route handlers
@@ -182,18 +189,38 @@ fn is_safe_local_request(peer: SocketAddr, headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+fn strict_metadata_response(path: &str) -> Option<Response<Body>> {
+    let body = match path {
+        "/api/init" => format!(
+            "{{\"initialized\":true,\"runtime\":\"rust\",\"version\":\"{}\",\"upstreamVersion\":\"{UPSTREAM_VERSION}\",\"upstreamSnapshot\":\"{UPSTREAM_COMMIT}\"}}",
+            env!("CARGO_PKG_VERSION")
+        ),
+        "/api/version" => format!(
+            "{{\"version\":\"{}\",\"name\":\"9router-rust\",\"rustBackend\":true,\"upstreamVersion\":\"{UPSTREAM_VERSION}\",\"upstreamSnapshot\":\"{UPSTREAM_COMMIT}\"}}",
+            env!("CARGO_PKG_VERSION")
+        ),
+        _ => return None,
+    };
+    Some(json_ok(body))
+}
+
 fn health_response() -> Response<Body> {
     let body = format!(
-        "{{\"ok\":true,\"status\":\"ok\",\"runtime\":\"rust\",\"version\":\"{}\",\"upstreamVersion\":\"0.5.75\",\"upstreamSnapshot\":\"{UPSTREAM_COMMIT}\"}}",
+        "{{\"ok\":true,\"status\":\"ok\",\"runtime\":\"rust\",\"version\":\"{}\",\"upstreamVersion\":\"{UPSTREAM_VERSION}\",\"upstreamSnapshot\":\"{UPSTREAM_COMMIT}\"}}",
         env!("CARGO_PKG_VERSION")
     );
+    let mut response = json_ok(body);
+    add_health_cors(response.headers_mut());
+    response
+}
+
+fn json_ok(body: String) -> Response<Body> {
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    add_health_cors(response.headers_mut());
     response
 }
 
@@ -272,5 +299,14 @@ mod tests {
             HeaderValue::from_static("https://router.example.com"),
         );
         assert!(!is_safe_local_request(peer("127.0.0.1:1234"), &headers));
+    }
+
+    #[test]
+    fn strict_metadata_uses_current_upstream_snapshot() {
+        let init = strict_metadata_response("/api/init").expect("init metadata");
+        let version = strict_metadata_response("/api/version").expect("version metadata");
+        assert_eq!(init.status(), StatusCode::OK);
+        assert_eq!(version.status(), StatusCode::OK);
+        assert!(strict_metadata_response("/api/providers").is_none());
     }
 }
