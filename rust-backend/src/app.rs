@@ -41,6 +41,19 @@ const LOCAL_ONLY_PREFIXES: &[&str] = &[
     "/api/headroom/proxy",
 ];
 
+const FORWARDED_PEER_HEADERS: &[&str] = &[
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "cf-connecting-ip",
+    "true-client-ip",
+    "x-client-ip",
+    "x-cluster-client-ip",
+    "x-9r-via-proxy",
+];
+
 pub fn router(state: AppState) -> Router {
     Router::new().fallback(entry).with_state(state)
 }
@@ -106,19 +119,26 @@ async fn handle_management(
     }
 
     let (parts, body) = request.into_parts();
+    let has_cli_token = auth::has_valid_cli_token(&state, &parts.headers);
 
-    if is_local_only_path(&path) && !is_safe_local_request(peer, &parts.headers) {
+    if is_local_only_path(&path)
+        && !has_cli_token
+        && (!is_safe_local_request(peer, &parts.headers)
+            || !auth::dashboard_authenticated(&state, &parts.headers)?)
+    {
         return Err(AppError::Forbidden(
-            "Local only: use the loopback listener".into(),
+            "Local only: CLI token or authenticated loopback request required".into(),
         ));
     }
 
-    if is_always_protected_path(&path) && !auth::has_valid_dashboard_session(&state, &parts.headers)
+    if is_always_protected_path(&path)
+        && !has_cli_token
+        && !auth::has_valid_dashboard_session(&state, &parts.headers)
     {
         return Err(AppError::Unauthorized);
     }
 
-    if !public_compat_path(&path) {
+    if !public_compat_path(&path) && !has_cli_token {
         auth::require_dashboard(&state, &parts.headers)?;
     }
 
@@ -165,7 +185,11 @@ fn is_local_only_path(path: &str) -> bool {
 }
 
 fn is_safe_local_request(peer: SocketAddr, headers: &HeaderMap) -> bool {
-    if !auth::is_loopback(peer) || headers.contains_key("x-9r-via-proxy") {
+    if !auth::is_loopback(peer)
+        || FORWARDED_PEER_HEADERS
+            .iter()
+            .any(|name| headers.contains_key(*name))
+    {
         return false;
     }
 
@@ -281,8 +305,11 @@ mod tests {
         assert!(!is_safe_local_request(peer("192.0.2.20:1234"), &headers));
 
         let mut forwarded = HeaderMap::new();
-        forwarded.insert("x-9r-via-proxy", HeaderValue::from_static("1"));
-        assert!(!is_safe_local_request(peer("127.0.0.1:1234"), &forwarded));
+        forwarded.insert("x-forwarded-for", HeaderValue::from_static("192.0.2.20"));
+        assert!(!is_safe_local_request(
+            peer("127.0.0.1:1234"),
+            &forwarded
+        ));
     }
 
     #[test]
@@ -298,7 +325,10 @@ mod tests {
             header::ORIGIN,
             HeaderValue::from_static("https://router.example.com"),
         );
-        assert!(!is_safe_local_request(peer("127.0.0.1:1234"), &headers));
+        assert!(!is_safe_local_request(
+            peer("127.0.0.1:1234"),
+            &headers
+        ));
     }
 
     #[test]
