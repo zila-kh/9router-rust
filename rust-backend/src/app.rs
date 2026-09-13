@@ -65,11 +65,12 @@ async fn entry(
     req: Request<Body>,
 ) -> Response<Body> {
     let path = req.uri().path().to_string();
-    let is_backend =
-        media::is_media_path(&path) || gateway::is_llm_path(&path) || path.starts_with("/api/");
-    let result: Result<Response<Body>, AppError> = if state.config.compat_api_enabled
-        && compat_media::is_path(&path)
-    {
+    let is_compat_media = state.config.compat_api_enabled && compat_media::is_path(&path);
+    let is_backend = is_compat_media
+        || media::is_media_path(&path)
+        || gateway::is_llm_path(&path)
+        || path.starts_with("/api/");
+    let result: Result<Response<Body>, AppError> = if is_compat_media {
         compat_media::handle(state, peer, req).await
     } else if media::is_media_path(&path) {
         media::handle(state, ConnectInfo(peer), req).await
