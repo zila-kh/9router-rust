@@ -10,13 +10,13 @@ The machine-readable source of truth for native Rust coverage is `rust-backend/p
 
 Rust remains the only public listener. For `/api/**` requests it:
 
-1. applies the Rust dashboard authentication gate;
-2. buffers the request and tries the native management handler;
-3. forwards only unported routes or non-JSON handlers to the loopback Next server;
+1. handles login, logout, session status, password reset, health, and native parity reporting itself;
+2. applies the Rust dashboard-authentication gate to protected compatibility routes;
+3. forwards other management requests to the exact pinned upstream route handler on the loopback Next server;
 4. injects a private `x-9router-ui-secret` header;
 5. labels the response `x-9router-runtime: upstream-compat`.
 
-The Next server rejects backend paths without the matching secret. `/v1`, `/v1beta`, `/responses`, and `/codex` remain Rust-owned and are never compatibility-forwarded.
+Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. The Next server rejects backend paths without the matching secret. `/v1`, `/v1beta`, `/responses`, and `/codex` remain Rust-owned and are never compatibility-forwarded.
 
 This mode restores broad dashboard functionality while the native port continues.
 
@@ -43,7 +43,7 @@ Core pieces include:
 - AWS EventStream, protobuf-wire, ConnectRPC envelope, gRPC-Web, and SSE codecs;
 - native embeddings for OpenAI-compatible and Gemini providers;
 - OpenAI-style TTS, STT multipart, and image-generation adapters where the provider catalog exposes compatible media endpoints;
-- core settings/providers/provider-nodes/proxy-pools/API-keys/combos/model-alias/custom-model/usage management routes.
+- core settings/providers/provider-nodes/proxy-pools/API-keys/combos/model-alias/custom-model/usage management routes in strict native mode.
 
 ## Declared gaps blocking a 100%-native release
 
