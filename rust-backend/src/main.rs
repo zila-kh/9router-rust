@@ -2,6 +2,7 @@
 
 mod app;
 mod auth;
+mod compat_proxy;
 mod config;
 mod db;
 mod error;
@@ -35,7 +36,13 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = cfg.listen;
     let state = AppState::new(cfg, db)?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr,version="1.0.1",ui=%state.config.ui_origin,"9Router Rust backend listening");
+    tracing::info!(
+        %addr,
+        version = "1.0.1",
+        ui = %state.config.ui_origin,
+        compat_api = state.config.compat_api_enabled,
+        "9Router Rust backend listening"
+    );
     axum::serve(
         listener,
         app::router(state).into_make_service_with_connect_info::<SocketAddr>(),
