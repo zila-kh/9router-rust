@@ -45,7 +45,7 @@ Inspect `x-9router-runtime` on API responses:
 
 The internal Next listener rejects `/api`, `/v1`, `/v1beta`, `/responses`, and `/codex` requests unless Rust provides the matching `x-9router-ui-secret` value. The launcher binds Next to loopback and sets `NINEROUTER_DISABLE_LEGACY_BRIDGE=1`.
 
-Rust mirrors upstream route security classes before delegation. Normal dashboard APIs require the dashboard session, update/shutdown/database operations always require a valid session, and host-control operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom control additionally require a direct loopback request.
+Rust mirrors upstream route security classes before delegation. Normal dashboard APIs require a dashboard session or the upstream-compatible `x-9r-cli-token`; update, shutdown, and database operations require a valid session or CLI token even when dashboard login is disabled. Host-control operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom control require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse proxy hop from being mistaken for a local user.
 
 The proxy does not follow HTTP redirects. OIDC, SAML, login, and other redirect responses are returned to the browser with the original public host and protocol preserved.
 
