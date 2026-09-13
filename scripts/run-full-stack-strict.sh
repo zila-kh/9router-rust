@@ -15,6 +15,16 @@ export NINEROUTER_DISABLE_LEGACY_BRIDGE=1
 export PORT="$PUBLIC_PORT"
 unset NINEROUTER_LEGACY_BACKEND_ORIGIN LEGACY_BACKEND_ORIGIN NINEROUTER_UI_SECRET
 
+if [[ -n "${NINEROUTER_DATA_DIR:-}" && -n "${DATA_DIR:-}" && "$NINEROUTER_DATA_DIR" != "$DATA_DIR" ]]; then
+  echo 'error: NINEROUTER_DATA_DIR and DATA_DIR must point to the same directory' >&2
+  exit 2
+fi
+if [[ -n "${NINEROUTER_DATA_DIR:-}" ]]; then
+  export DATA_DIR="$NINEROUTER_DATA_DIR"
+elif [[ -n "${DATA_DIR:-}" ]]; then
+  export NINEROUTER_DATA_DIR="$DATA_DIR"
+fi
+
 bash "$ROOT/scripts/materialize-frontend.sh" "$FRONTEND_DIR"
 
 if [[ ! -d "$FRONTEND_DIR/.next" ]]; then
