@@ -26,6 +26,15 @@ request() {
 request health "$BASE/api/health"
 grep -Eq '"runtime"[[:space:]]*:[[:space:]]*"rust"' "$TMP/health.body"
 
+
+request locale_set --header 'content-type: application/json' --data '{"locale":"km"}' "$BASE/api/locale"
+grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$TMP/locale_set.body"
+grep -Eq '"locale"[[:space:]]*:[[:space:]]*"km"' "$TMP/locale_set.body"
+grep -Eqi '^set-cookie:.*locale=km' "$TMP/locale_set.headers"
+status="$(curl --silent --show-error --output "$TMP/locale_bad.body" --dump-header "$TMP/locale_bad.headers" --write-out '%{http_code}' --header 'content-type: application/json' --data '{"locale":"invalid"}' "$BASE/api/locale")"
+assert_native_headers "$TMP/locale_bad.headers"
+[[ "$status" == 400 ]]
+
 request login_page "$BASE/login"
 grep -Eqi '<!doctype html|<html' "$TMP/login_page.body"
 
