@@ -1,6 +1,12 @@
 {
   "version": "1.0.1",
-  "upstreamCommit": "eb712ca821f0ba6bc41043fbd14494c5af5daba5",
+  "upstreamCommit": "17c4cc76877bd1755030a8414f8d0083f48dcccf",
+  "compatibilityFallback": {
+    "enabledBy": "NINEROUTER_COMPAT_API=1",
+    "runtimeHeader": "x-9router-runtime: upstream-compat",
+    "publicListener": "rust",
+    "internalHandler": "pinned Next API routes"
+  },
   "native": [
     "api/health/route.js",
     "api/init/route.js",
@@ -64,7 +70,7 @@
     "Tailscale/cloudflared tunnel management",
     "MCP endpoints",
     "remaining specialized media adapters",
-    "proxy-pool deployment/test subroutes remain bridge-only",
+    "proxy-pool deployment/test subroutes remain compatibility-only",
     "settings database CLI-token bypass is stricter in Rust until machine-ID token derivation is ported",
     "Antigravity translator diagnostics use Gemini as the Rust intermediate instead of exposing a separate antigravity format enum"
   ]
