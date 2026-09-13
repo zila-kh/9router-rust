@@ -24,7 +24,7 @@ async function hasValidCliToken(request) {
 const PUBLIC_API_ROUTES = new Set([
   "GET /api/health",
   "GET /api/init",
-  "GET /api/locale",
+  "POST /api/locale",
   "POST /api/auth/login",
   "POST /api/auth/logout",
   "GET /api/auth/status",
