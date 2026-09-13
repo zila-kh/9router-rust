@@ -1,0 +1,109 @@
+name: Apply release fix once
+
+on:
+  push:
+    branches: [fix/release-hardening-2026-09]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/release-hardening-2026-09
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply password regression fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          management = Path("rust-backend/src/management.rs")
+          text = management.read_text()
+          old = '''        } else if current_password
+              .as_deref()
+              .is_some_and(|value| !value.is_empty() && value != "123456")
+          {
+              return json_response_no_store(
+                  StatusCode::UNAUTHORIZED,
+                  json!({"error":"Invalid current password"}),
+              );
+          }
+          '''
+          new = '''        } else if let Some(current_password) = current_password
+              .as_deref()
+              .filter(|value| !value.is_empty())
+          {
+              if !auth::verify_password(state, current_password)? {
+                  return json_response_no_store(
+                      StatusCode::UNAUTHORIZED,
+                      json!({"error":"Invalid current password"}),
+                  );
+              }
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("management password block did not match exactly once")
+          management.write_text(text.replace(old, new))
+
+          smoke = Path("scripts/smoke-e2e.sh")
+          text = smoke.read_text()
+          old_start = '''NINEROUTER_DB_PATH="$TMP/data/db/data.sqlite" \\
+          rust-backend/target/debug/9router-rust >"$RUST_LOG" 2>&1 &
+          '''
+          new_start = '''NINEROUTER_DB_PATH="$TMP/data/db/data.sqlite" \\
+          INITIAL_PASSWORD=e2e-initial-password \\
+          rust-backend/target/debug/9router-rust >"$RUST_LOG" 2>&1 &
+          '''
+          if text.count(old_start) != 1:
+              raise SystemExit("strict smoke startup block did not match exactly once")
+          text = text.replace(old_start, new_start)
+          old_login = '''  -d '{"password":"123456"}' http://127.0.0.1:20128/api/auth/login >"$TMP/login.json"
+          '''
+          new_login = '''  -d '{"password":"e2e-initial-password"}' http://127.0.0.1:20128/api/auth/login >"$TMP/login.json"
+          '''
+          if text.count(old_login) != 1:
+              raise SystemExit("strict smoke login block did not match exactly once")
+          text = text.replace(old_login, new_login)
+          marker = '''grep -q '"settings"' "$TMP/settings.json"
+          '''
+          addition = '''grep -q '"settings"' "$TMP/settings.json"
+
+          curl -fsS -b "$COOKIE" -H 'content-type: application/json' --request PATCH \\
+            -d '{"currentPassword":"e2e-initial-password","newPassword":"e2e-new-password"}' \\
+            http://127.0.0.1:20128/api/settings >"$TMP/password-change.json"
+          grep -q '"success":true' "$TMP/password-change.json"
+
+          OLD_LOGIN_CODE=$(curl -sS -o "$TMP/old-password-login.json" -w '%{http_code}' \\
+            -H 'content-type: application/json' \\
+            -d '{"password":"e2e-initial-password"}' \\
+            http://127.0.0.1:20128/api/auth/login)
+          test "$OLD_LOGIN_CODE" = 401
+          curl -fsS -c "$TMP/new-cookie.txt" -H 'content-type: application/json' \\
+            -d '{"password":"e2e-new-password"}' \\
+            http://127.0.0.1:20128/api/auth/login >"$TMP/new-password-login.json"
+          grep -q '"success":true' "$TMP/new-password-login.json"
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit("strict smoke settings marker did not match exactly once")
+          smoke.write_text(text.replace(marker, addition))
+          PY
+          cargo fmt --manifest-path rust-backend/Cargo.toml --all
+          bash -n scripts/smoke-e2e.sh
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            echo 'No patch was necessary.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add rust-backend/src/management.rs rust-backend/src/providers.rs rust-backend/src/login_limiter.rs scripts/smoke-e2e.sh
+          git commit -m 'fix: verify configured initial password changes'
+          git push origin HEAD:fix/release-hardening-2026-09
