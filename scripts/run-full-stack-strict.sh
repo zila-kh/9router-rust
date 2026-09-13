@@ -6,7 +6,7 @@ FRONTEND_DIR="${NINEROUTER_FRONTEND_DIR:-$ROOT/frontend}"
 PUBLIC_PORT="${PORT:-20128}"
 UI_PORT="${NINEROUTER_UI_PORT:-20129}"
 UI_HOST="127.0.0.1"
-RUST_BIN="${NINEROUTER_RUST_BIN:-$ROOT/rust-backend/target/release/nine-router-rs}"
+RUST_BIN="${NINEROUTER_RUST_BIN:-$ROOT/rust-backend/target/release/9router-rust}"
 
 export NINEROUTER_UI_ONLY=1
 export NINEROUTER_COMPAT_API=0
