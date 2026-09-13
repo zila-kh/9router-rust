@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/zila-kh/9router-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/zila-kh/9router-rust/actions/workflows/ci.yml)
 
-Rust owns the public 9Router listener while the existing Next/React application supplies the dashboard. Native Rust routes are preferred; management APIs that have not been ported yet can run through a secured, loopback-only compatibility path so the dashboard remains usable during the migration.
+Rust owns the public 9Router listener while the existing Next/React application supplies the dashboard. In normal compatibility mode, Rust keeps authentication and the public security boundary while the pinned upstream API handlers preserve exact dashboard contracts until their native Rust replacements reach full parity.
 
 - Upstream repository: `decolua/9router`
 - Pinned source snapshot: `17c4cc76877bd1755030a8414f8d0083f48dcccf` (`0.5.75`)
@@ -28,15 +28,16 @@ Production build:
 Both commands:
 
 1. materialize the exact pinned upstream source if the vendored frontend is stale;
-2. keep the upstream `src/app/api` handlers available only on the loopback Next listener;
+2. keep upstream `src/app/api` handlers available only on the loopback Next listener;
 3. generate one shared internal secret for Rust and Next;
 4. start Rust as the only public listener;
-5. try native Rust management routes first and delegate only unported routes.
+5. keep login, session enforcement, health, and parity reporting native in Rust;
+6. send other dashboard management APIs through the pinned upstream handlers for exact response shapes and current feature coverage.
 
 Inspect `x-9router-runtime` on API responses:
 
 - `rust` — handled natively by the Rust backend;
-- `upstream-compat` — authenticated by Rust, then handled by the pinned upstream API route;
+- `upstream-compat` — authenticated or admitted by Rust, then handled by the pinned upstream API route;
 - `legacy-bridge` — old full-backend bridge mode, only when explicitly configured.
 
 The internal Next listener rejects `/api`, `/v1`, `/v1beta`, `/responses`, and `/codex` requests unless Rust provides the matching `x-9router-ui-secret` value. The launcher binds Next to loopback and sets `NINEROUTER_DISABLE_LEGACY_BRIDGE=1`.
@@ -81,7 +82,7 @@ Full-stack checks:
 ./scripts/full-stack-smoke-v2.sh http://127.0.0.1:20128
 ```
 
-The first smoke test verifies a real upstream-only endpoint through the secured compatibility path and confirms that direct internal API access is rejected. The second verifies strict native-only behavior.
+The first smoke test verifies Rust-owned login and health, exact upstream dashboard API routing, an upstream-only endpoint, and rejection of direct internal API access. The second verifies strict native-only behavior.
 
 ## Update the pinned upstream source
 
