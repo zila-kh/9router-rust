@@ -36,13 +36,15 @@ fi
 # The Next process renders the existing dashboard and retains upstream API route
 # handlers only as an internal compatibility layer. Rust remains the sole public
 # listener and authenticates every request before it may reach those handlers.
-python3 - "$DEST" "$UPSTREAM_SHA" <<'PY'
+python3 - "$DEST" "$UPSTREAM_SHA" "$ROOT" <<'PY'
 from pathlib import Path
 import json
+import shutil
 import sys
 
 root = Path(sys.argv[1])
 upstream_sha = sys.argv[2]
+repo_root = Path(sys.argv[3])
 
 proxy = root / "src/proxy.js"
 proxy.write_text('''import { NextResponse } from "next/server";\n\nconst RUST_BACKEND_PREFIXES = ["/api", "/v1", "/v1beta", "/responses", "/codex"];\nconst INTERNAL_SECRET_HEADER = "x-9router-ui-secret";\n\nfunction isBackendPath(pathname) {\n  return RUST_BACKEND_PREFIXES.some(\n    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),\n  );\n}\n\nfunction isCompatApiPath(pathname) {\n  return pathname === "/api" || pathname.startsWith("/api/");\n}\n\nfunction isTrustedRustRequest(request) {\n  const configured = process.env.NINEROUTER_UI_SECRET;\n  const supplied = request.headers.get(INTERNAL_SECRET_HEADER);\n  return Boolean(configured && supplied && supplied === configured);\n}\n\nexport default async function proxy(request) {\n  if (process.env.NINEROUTER_UI_ONLY === "1") {\n    if (isCompatApiPath(request.nextUrl.pathname) && isTrustedRustRequest(request)) {\n      return NextResponse.next();\n    }\n    if (isBackendPath(request.nextUrl.pathname)) {\n      return NextResponse.json(\n        { error: "Rust backend required", code: "RUST_BACKEND_REQUIRED" },\n        { status: 421, headers: { "Cache-Control": "no-store" } },\n      );\n    }\n    return NextResponse.next();\n  }\n  const { proxy: dashboardProxy } = await import("./dashboardGuard");\n  return dashboardProxy(request);\n}\n\nexport const config = {\n  matcher: ["/((?!_next/static|_next/image|favicon\\\\.ico).*)"],\n};\n''', encoding="utf-8")
@@ -71,10 +73,36 @@ if guard not in text:
     text = text.replace(needle, guard, 1)
 next_config.write_text(text, encoding="utf-8")
 
+# Security-sensitive files are maintained as exact, reviewed overlays. A clean
+# rematerialization must produce the same trust boundary as the committed tree.
+overlay_root = repo_root / "scripts" / "frontend-overrides"
+overlays = {
+    overlay_root / "custom-server.js": root / "custom-server.js",
+    overlay_root / "src" / "dashboardGuard.js": root / "src" / "dashboardGuard.js",
+    overlay_root / "src" / "app" / "api" / "auth" / "login" / "route.js":
+        root / "src" / "app" / "api" / "auth" / "login" / "route.js",
+}
+for source, target in overlays.items():
+    if not source.is_file():
+        raise SystemExit(f"required frontend override is missing: {source}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+
 package = root / "package.json"
 data = json.loads(package.read_text(encoding="utf-8"))
-data.setdefault('scripts', {})['dev:ui'] = 'next dev --webpack --hostname 127.0.0.1 --port 20129'
-data['scripts']['start:ui'] = 'next start --hostname 127.0.0.1 --port 20129'
+scripts = data.setdefault('scripts', {})
+scripts['dev:ui'] = 'next dev --webpack --hostname 127.0.0.1 --port 20129'
+scripts['start:ui'] = 'node .next/standalone/custom-server.js'
+scripts['lint'] = 'eslint . --max-warnings=0'
+# The Rust port does not vendor upstream's legacy CLI package. Do not expose npm
+# commands that point at a non-existent frontend/cli directory.
+scripts.pop('cli:pack', None)
+scripts.pop('cli:publish', None)
+data.setdefault('dependencies', {})['monaco-editor'] = '^0.56.0'
+data['comment_better_sqlite3'] = (
+    "kept in optionalDependencies so npm install doesn't fail on systems without "
+    "build tools — sql.js is used as fallback at runtime"
+)
 package.write_text(json.dumps(data, indent=2) + '\n', encoding="utf-8")
 
 # /v1/audio/voices delegates to another internal Next API route. In UI-only
