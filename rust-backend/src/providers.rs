@@ -1,7 +1,7 @@
 use crate::{error::AppError, state::AppState};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
 fn resolve_env_placeholders_with<F>(value: &mut Value, lookup: &F)
 where
@@ -149,13 +149,14 @@ pub fn canonical_provider(id: &str) -> String {
 
 pub fn resolve_model(state: &AppState, requested: &str) -> Result<ResolvedModel, AppError> {
     let aliases = state.db.kv_all("modelAliases")?;
-    let mut queue = VecDeque::from([requested.to_string()]);
+    let mut candidate = requested.to_string();
     let mut visited = HashSet::new();
-    let mut traversed_alias = false;
 
-    while let Some(candidate) = queue.pop_front() {
+    loop {
         if !visited.insert(candidate.clone()) {
-            continue;
+            return Err(AppError::BadRequest(format!(
+                "model alias graph for {requested} is cyclic"
+            )));
         }
         if visited.len() > 64 {
             return Err(AppError::BadRequest(
@@ -163,39 +164,30 @@ pub fn resolve_model(state: &AppState, requested: &str) -> Result<ResolvedModel,
             ));
         }
 
-        match resolve_unaliased(state, &candidate) {
-            Ok(mut resolved) => {
-                resolved.requested = requested.to_string();
-                return Ok(resolved);
-            }
-            Err(AppError::NotFound(_)) => {}
-            Err(error) => return Err(error),
+        let (explicit, model) = split_model(&candidate);
+        if let Some(provider) = explicit {
+            let mut resolved = resolve_for_provider(state, provider, &candidate, model)?;
+            resolved.requested = requested.to_string();
+            return Ok(resolved);
         }
 
-        if let Some(target) = aliases
-            .get(&candidate)
-            .and_then(Value::as_str)
-            .map(str::to_string)
+        // Preserve the original alias precedence: configured aliases must be
+        // followed before provider-name inference or catalog discovery.
+        if let Some(target) = aliases.get(&candidate).and_then(Value::as_str) {
+            candidate = target.to_string();
+            continue;
+        }
+        if let Some((target, _)) = aliases
+            .iter()
+            .find(|(_, value)| value.as_str() == Some(candidate.as_str()))
         {
-            traversed_alias = true;
-            queue.push_back(target);
+            candidate = target.clone();
+            continue;
         }
-        for (key, value) in &aliases {
-            if value.as_str() == Some(candidate.as_str()) {
-                traversed_alias = true;
-                queue.push_back(key.clone());
-            }
-        }
-    }
 
-    if traversed_alias {
-        Err(AppError::BadRequest(format!(
-            "model alias graph for {requested} is cyclic or does not resolve to an active model"
-        )))
-    } else {
-        Err(AppError::NotFound(format!(
-            "no active provider for model {requested}"
-        )))
+        let mut resolved = resolve_unaliased(state, &candidate)?;
+        resolved.requested = requested.to_string();
+        return Ok(resolved);
     }
 }
 
@@ -487,5 +479,23 @@ mod tests {
             assert_eq!(resolved.provider, "openai");
             assert_eq!(resolved.model, "model-x");
         }
+    }
+
+    #[test]
+    fn configured_aliases_take_precedence_over_provider_inference() {
+        let (_temp, state) = test_state();
+        state
+            .db
+            .create_connection(json!({"provider":"openai","apiKey":"test-key"}))
+            .expect("create provider connection");
+        state
+            .db
+            .kv_set("modelAliases", "gpt-friendly", &json!("openai/model-x"))
+            .expect("store model alias");
+
+        let resolved = resolve_model(&state, "gpt-friendly").expect("resolve model alias");
+        assert_eq!(resolved.requested, "gpt-friendly");
+        assert_eq!(resolved.provider, "openai");
+        assert_eq!(resolved.model, "model-x");
     }
 }
