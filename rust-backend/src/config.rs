@@ -27,6 +27,7 @@ impl Config {
             .and_then(|value| value.parse::<u16>().ok())
             .unwrap_or(20128);
         let data_dir = env::var_os("NINEROUTER_DATA_DIR")
+            .or_else(|| env::var_os("DATA_DIR"))
             .map(PathBuf::from)
             .unwrap_or_else(default_data_dir);
         let db_path = env::var_os("NINEROUTER_DB_PATH")
@@ -77,10 +78,15 @@ fn env_flag(name: &str, default: bool) -> bool {
 
 fn default_data_dir() -> PathBuf {
     if cfg!(windows) {
-        env::var_os("USERPROFILE")
+        env::var_os("APPDATA")
             .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("USERPROFILE")
+                    .map(PathBuf::from)
+                    .map(|home| home.join("AppData").join("Roaming"))
+            })
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".9router")
+            .join("9router")
     } else {
         env::var_os("HOME")
             .map(PathBuf::from)
