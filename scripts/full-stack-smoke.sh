@@ -42,7 +42,7 @@ case "$oidc_location" in
   *) echo "OIDC redirect lost the public origin: $oidc_location" >&2; exit 1 ;;
 esac
 
-# Authenticate through Rust before exercising protected compatibility APIs.
+# Authenticate through Rust before exercising protected dashboard APIs.
 curl --silent --show-error --fail-with-body \
   --cookie-jar "$TMP/cookies" \
   --header 'content-type: application/json' \
@@ -91,28 +91,45 @@ grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags.headers"
 grep -Eq '"models"[[:space:]]*:[[:space:]]*\[' "$TMP/tags.body"
 
 # CLI clients use the same machine-id/secret-derived token as upstream and do not
-# need a dashboard cookie for protected management APIs.
+# need a dashboard cookie for protected management and LLM compatibility APIs.
 if [[ -n "$CLI_TOKEN" ]]; then
   request tags_cli --header "x-9r-cli-token: $CLI_TOKEN" "$BASE/api/tags"
   grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags_cli.headers"
   grep -Eq '"models"[[:space:]]*:[[:space:]]*\[' "$TMP/tags_cli.body"
 fi
 
-# Non-native public APIs must use upstream's current contracts instead of being
-# swallowed by the broad native /v1 gateway.
-request v1_root "$BASE/v1"
+# Publicly reachable LLM paths must still require an API key or CLI token. This
+# prevents a reverse proxy or loopback hop from turning /v1 into an anonymous API.
+unauth_v1_status="$(curl --silent --show-error \
+  --dump-header "$TMP/v1-unauth.headers" \
+  --output "$TMP/v1-unauth.body" \
+  --write-out '%{http_code}' \
+  "$BASE/v1")"
+[[ "$unauth_v1_status" == 401 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/v1-unauth.headers"
+
+if [[ -z "$CLI_TOKEN" ]]; then
+  echo 'NINEROUTER_TEST_CLI_TOKEN is required to test protected /v1 compatibility APIs' >&2
+  exit 1
+fi
+LLM_AUTH=(--header "x-9r-cli-token: $CLI_TOKEN")
+
+# Non-native protected APIs must use upstream's current contracts instead of
+# being swallowed by the broad native /v1 gateway.
+request v1_root "${LLM_AUTH[@]}" "$BASE/v1"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/v1_root.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/v1_root.body"
 
-request v1_double_root "$BASE/v1/v1"
+request v1_double_root "${LLM_AUTH[@]}" "$BASE/v1/v1"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/v1_double_root.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/v1_double_root.body"
 
-request image_models "$BASE/v1/models/image"
+request image_models "${LLM_AUTH[@]}" "$BASE/v1/models/image"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/image_models.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/image_models.body"
 
 curl --silent --show-error --fail-with-body \
+  "${LLM_AUTH[@]}" \
   --header 'content-type: application/json' \
   --data '{"messages":[{"role":"user","content":"hello"}]}' \
   --dump-header "$TMP/count_tokens.headers" \
@@ -121,20 +138,21 @@ curl --silent --show-error --fail-with-body \
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/count_tokens.headers"
 grep -Eq '"input_tokens"[[:space:]]*:' "$TMP/count_tokens.body"
 
-request gemini_models "$BASE/v1beta/models"
+request gemini_models "${LLM_AUTH[@]}" "$BASE/v1beta/models"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/gemini_models.headers"
 grep -Eq '"models"[[:space:]]*:' "$TMP/gemini_models.body"
 
 # local-device returns an empty list on Linux when macOS/Windows speech tools are
 # unavailable, but still exercises the nested secret-authenticated internal fetch.
-request local_voices "$BASE/v1/audio/voices?provider=local-device"
+request local_voices "${LLM_AUTH[@]}" "$BASE/v1/audio/voices?provider=local-device"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/local_voices.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/local_voices.body"
 
-# Upstream 0.5.75 added public video APIs. A fresh database has no xAI account, so
-# the expected response is an upstream validation/credential error, not Rust's old
+# Upstream 0.5.75 added video APIs. A fresh database has no xAI account, so the
+# expected response is an upstream validation/credential error, not Rust's old
 # 404/501 "media route not implemented" response.
 video_status="$(curl --silent --show-error \
+  "${LLM_AUTH[@]}" \
   --header 'content-type: application/json' \
   --data '{}' \
   --dump-header "$TMP/video.headers" \
@@ -151,8 +169,8 @@ case "$video_status" in
 esac
 ! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
 
-# The exact /v1/web path is handled only by the public compatibility router.
-# Its preflight proves the route is wired and classified as a Rust backend path.
+# The exact /v1/web path is handled only by the compatibility router. Its CORS
+# preflight remains unauthenticated and proves the route is wired correctly.
 web_preflight_status="$(curl --silent --show-error \
   --request OPTIONS \
   --dump-header "$TMP/web-preflight.headers" \
