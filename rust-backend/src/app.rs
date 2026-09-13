@@ -23,6 +23,7 @@ const ALWAYS_PROTECTED_PREFIXES: &[&str] = &[
     "/api/version/update",
     "/api/oauth/cursor/auto-import",
     "/api/oauth/kiro/auto-import",
+    "/api/oauth/xiaomi-mimo/auto-import",
 ];
 
 const LOCAL_ONLY_PREFIXES: &[&str] = &[
@@ -31,12 +32,22 @@ const LOCAL_ONLY_PREFIXES: &[&str] = &[
     "/api/tunnel/",
     "/api/oauth/cursor/auto-import",
     "/api/oauth/kiro/auto-import",
+    "/api/oauth/xiaomi-mimo/auto-import",
     "/api/auth/reset-password",
     "/api/headroom/",
     "/api/pxpipe/",
     "/api/shutdown",
     "/api/version/shutdown",
     "/api/version/update",
+];
+
+const LOCAL_ONLY_OAUTH_ACTIONS: &[&str] = &[
+    "ide-status",
+    "manual-code",
+    "poll-status",
+    "register-session",
+    "start-proxy",
+    "stop-proxy",
 ];
 
 pub fn router(state: AppState) -> Router {
@@ -210,10 +221,30 @@ fn is_always_protected_path(path: &str) -> bool {
         .any(|prefix| path.starts_with(prefix))
 }
 
+fn is_local_oauth_action(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    let Some(rest) = path.strip_prefix("/api/oauth/") else {
+        return false;
+    };
+    let mut segments = rest.split('/');
+    let (Some(provider), Some(action), None) =
+        (segments.next(), segments.next(), segments.next())
+    else {
+        return false;
+    };
+    if provider.is_empty() || action.is_empty() {
+        return false;
+    }
+
+    LOCAL_ONLY_OAUTH_ACTIONS.contains(&action)
+        || (provider == "xiaomi-mimo" && matches!(action, "authorize" | "exchange"))
+}
+
 fn is_local_only_path(path: &str) -> bool {
     LOCAL_ONLY_PREFIXES
         .iter()
         .any(|prefix| path.starts_with(prefix))
+        || is_local_oauth_action(path)
 }
 
 fn strict_metadata_response(path: &str) -> Option<Response<Body>> {
@@ -318,12 +349,43 @@ mod tests {
     fn sensitive_route_classes_are_preserved() {
         assert!(is_always_protected_path("/api/settings/database"));
         assert!(is_always_protected_path("/api/version/update/check"));
+        assert!(is_always_protected_path(
+            "/api/oauth/xiaomi-mimo/auto-import"
+        ));
         assert!(is_local_only_path("/api/headroom/start"));
         assert!(is_local_only_path("/api/headroom/status"));
         assert!(is_local_only_path("/api/pxpipe/logs"));
         assert!(is_local_only_path("/api/cli-tools/codex-settings"));
         assert!(is_local_only_path("/api/mcp/tools"));
+        assert!(is_local_only_path(
+            "/api/oauth/xiaomi-mimo/auto-import"
+        ));
         assert!(!is_local_only_path("/api/providers"));
+    }
+
+    #[test]
+    fn local_oauth_host_actions_are_exact_and_trailing_slash_safe() {
+        for path in [
+            "/api/oauth/codex/start-proxy",
+            "/api/oauth/codex/start-proxy/",
+            "/api/oauth/xai/manual-code",
+            "/api/oauth/trae/register-session",
+            "/api/oauth/windsurf/poll-status",
+            "/api/oauth/zed/ide-status",
+            "/api/oauth/xiaomi-mimo/authorize",
+            "/api/oauth/xiaomi-mimo/exchange",
+        ] {
+            assert!(is_local_only_path(path), "{path}");
+        }
+        for path in [
+            "/api/oauth/github/device-code",
+            "/api/oauth/github/poll",
+            "/api/oauth/codex/exchange",
+            "/api/oauth/xiaomi-mimo/api-key",
+            "/api/oauth/codex/start-proxy/extra",
+        ] {
+            assert!(!is_local_only_path(path), "{path}");
+        }
     }
 
     #[test]
