@@ -1,0 +1,123 @@
+name: One-shot release readiness audit
+
+on:
+  push:
+    branches:
+      - fix/release-hardening-2026-09
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/release-hardening-2026-09
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Source and launcher audit
+        run: |
+          set +e
+          status=0
+          python3 scripts/static-audit.py || status=$?
+          bash -n scripts/*.sh || status=$?
+          node --check frontend/custom-server.js || status=$?
+          node --check frontend/src/dashboardGuard.js || status=$?
+          node --check frontend/src/proxy.js || status=$?
+          while IFS= read -r -d '' file; do
+            node --check "$file" || status=$?
+          done < <(find scripts -maxdepth 1 -type f -name '*.mjs' -print0)
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -S warning scripts/*.sh || status=$?
+          else
+            echo 'shellcheck is not installed on this runner' >&2
+            status=127
+          fi
+          echo "$status" > /tmp/source.status
+          exit 0
+      - name: Install frontend dependencies
+        run: |
+          set +e
+          npm --prefix frontend ci
+          status=$?
+          echo "$status" > /tmp/npm-install.status
+          exit 0
+      - name: Audit production npm dependencies
+        run: |
+          set +e
+          npm --prefix frontend audit --omit=dev --audit-level=moderate --json > /tmp/npm-production-audit.json
+          status=$?
+          cat /tmp/npm-production-audit.json
+          echo "$status" > /tmp/npm-production.status
+          exit 0
+      - name: Audit all npm dependencies
+        run: |
+          set +e
+          npm --prefix frontend audit --audit-level=moderate --json > /tmp/npm-full-audit.json
+          status=$?
+          cat /tmp/npm-full-audit.json
+          echo "$status" > /tmp/npm-full.status
+          exit 0
+      - name: Run frontend lint
+        run: |
+          set +e
+          npm --prefix frontend run lint
+          status=$?
+          echo "$status" > /tmp/npm-lint.status
+          exit 0
+      - name: Install cargo-audit
+        run: |
+          set +e
+          cargo install cargo-audit --locked
+          status=$?
+          echo "$status" > /tmp/cargo-audit-install.status
+          exit 0
+      - name: Audit Rust dependencies
+        run: |
+          set +e
+          cargo audit --file rust-backend/Cargo.lock --json > /tmp/cargo-audit.json
+          status=$?
+          cat /tmp/cargo-audit.json
+          echo "$status" > /tmp/cargo-audit.status
+          exit 0
+      - name: Remove one-shot audit workflow
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/release-readiness-audit.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'chore: remove one-shot release audit workflow'
+          git push origin HEAD:fix/release-hardening-2026-09
+      - name: Enforce release audit gate
+        if: always()
+        run: |
+          set -euo pipefail
+          failed=0
+          for entry in \
+            source:/tmp/source.status \
+            npm-install:/tmp/npm-install.status \
+            npm-production:/tmp/npm-production.status \
+            npm-lint:/tmp/npm-lint.status \
+            cargo-audit-install:/tmp/cargo-audit-install.status \
+            cargo-audit:/tmp/cargo-audit.status
+          do
+            name=${entry%%:*}
+            file=${entry#*:}
+            status=$(cat "$file" 2>/dev/null || printf '99')
+            printf '%s status: %s\n' "$name" "$status"
+            if [[ "$status" != 0 ]]; then failed=1; fi
+          done
+          echo "npm full audit status (informational): $(cat /tmp/npm-full.status 2>/dev/null || printf '99')"
+          exit "$failed"
