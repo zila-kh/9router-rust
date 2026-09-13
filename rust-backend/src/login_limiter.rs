@@ -6,6 +6,7 @@ use std::{
 };
 
 const MAX_FAILS_BEFORE_LOCK: u32 = 5;
+const MAX_TRACKED_IPS: usize = 10_000;
 const LOCK_STEPS: [Duration; 4] = [
     Duration::from_secs(30),
     Duration::from_secs(120),
@@ -40,13 +41,47 @@ fn locked_attempts() -> std::sync::MutexGuard<'static, HashMap<IpAddr, AttemptSt
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+fn is_stale(entry: &AttemptState, now: Instant) -> bool {
+    now.saturating_duration_since(entry.last_fail_at) > FAIL_WINDOW
+        && entry.lock_until.is_none_or(|until| now >= until)
+}
+
 fn purge_expired(map: &mut HashMap<IpAddr, AttemptState>, ip: IpAddr, now: Instant) {
-    let remove = map.get(&ip).is_some_and(|entry| {
-        now.duration_since(entry.last_fail_at) > FAIL_WINDOW
-            && entry.lock_until.is_none_or(|until| now >= until)
-    });
-    if remove {
+    if map.get(&ip).is_some_and(|entry| is_stale(entry, now)) {
         map.remove(&ip);
+    }
+}
+
+fn make_room_for(
+    map: &mut HashMap<IpAddr, AttemptState>,
+    incoming: IpAddr,
+    now: Instant,
+    limit: usize,
+) {
+    if map.contains_key(&incoming) || map.len() < limit {
+        return;
+    }
+
+    map.retain(|_, entry| !is_stale(entry, now));
+    if map.len() < limit {
+        return;
+    }
+
+    // Prefer evicting the oldest currently-unlocked entry. If every tracked IP
+    // is locked, evict the oldest entry so untrusted proxy headers cannot grow
+    // this process-global map without bound.
+    let victim = map
+        .iter()
+        .filter(|(_, entry)| entry.lock_until.is_none_or(|until| now >= until))
+        .min_by_key(|(_, entry)| entry.last_fail_at)
+        .map(|(ip, _)| *ip)
+        .or_else(|| {
+            map.iter()
+                .min_by_key(|(_, entry)| entry.last_fail_at)
+                .map(|(ip, _)| *ip)
+        });
+    if let Some(victim) = victim {
+        map.remove(&victim);
     }
 }
 
@@ -86,6 +121,7 @@ pub fn record_failure(ip: IpAddr) -> u32 {
     let now = Instant::now();
     let mut map = locked_attempts();
     purge_expired(&mut map, ip, now);
+    make_room_for(&mut map, ip, now, MAX_TRACKED_IPS);
     let entry = map.entry(ip).or_insert(AttemptState {
         fails: 0,
         lock_until: None,
@@ -111,6 +147,15 @@ pub fn record_success(ip: IpAddr) {
 mod tests {
     use super::*;
 
+    fn state(last_fail_at: Instant, lock_until: Option<Instant>) -> AttemptState {
+        AttemptState {
+            fails: 1,
+            lock_until,
+            lock_level: 0,
+            last_fail_at,
+        }
+    }
+
     #[test]
     fn fifth_failure_starts_a_lock_and_success_clears_it() {
         let ip: IpAddr = "198.51.100.42".parse().expect("test IP");
@@ -125,5 +170,47 @@ mod tests {
         assert!((1..=30).contains(&lock.retry_after_secs));
         record_success(ip);
         assert!(!check_lock(ip).locked);
+    }
+
+    #[test]
+    fn capacity_cleanup_prefers_stale_then_oldest_unlocked_entries() {
+        let now = Instant::now();
+        let stale_ip: IpAddr = "198.51.100.1".parse().unwrap();
+        let old_ip: IpAddr = "198.51.100.2".parse().unwrap();
+        let locked_ip: IpAddr = "198.51.100.3".parse().unwrap();
+        let incoming: IpAddr = "198.51.100.4".parse().unwrap();
+        let mut map = HashMap::from([
+            (
+                stale_ip,
+                state(
+                    now.checked_sub(FAIL_WINDOW + Duration::from_secs(1))
+                        .unwrap(),
+                    None,
+                ),
+            ),
+            (
+                old_ip,
+                state(now.checked_sub(Duration::from_secs(20)).unwrap(), None),
+            ),
+            (
+                locked_ip,
+                state(
+                    now.checked_sub(Duration::from_secs(10)).unwrap(),
+                    now.checked_add(Duration::from_secs(30)),
+                ),
+            ),
+        ]);
+
+        make_room_for(&mut map, incoming, now, 3);
+        assert!(!map.contains_key(&stale_ip));
+        assert!(map.contains_key(&old_ip));
+        assert!(map.contains_key(&locked_ip));
+
+        map.insert(incoming, state(now, None));
+        let next: IpAddr = "198.51.100.5".parse().unwrap();
+        make_room_for(&mut map, next, now, 3);
+        assert!(!map.contains_key(&old_ip));
+        assert!(map.contains_key(&locked_ip));
+        assert!(map.contains_key(&incoming));
     }
 }
