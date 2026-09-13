@@ -57,6 +57,13 @@
     "grpc-web",
     "sse"
   ],
+  "nativeSecurity": [
+    "dashboard JWT sessions",
+    "upstream x-9r-cli-token validation",
+    "API key validation",
+    "always-protected route classification",
+    "direct-loopback and forwarded-peer checks for host-control routes"
+  ],
   "knownNonParity": [
     "interactive OAuth provider flows and provider-specific refresh quirks",
     "SAML/OIDC login endpoints",
@@ -71,7 +78,6 @@
     "MCP endpoints",
     "remaining specialized media adapters",
     "proxy-pool deployment/test subroutes remain compatibility-only",
-    "settings database CLI-token bypass is stricter in Rust until machine-ID token derivation is ported",
     "Antigravity translator diagnostics use Gemini as the Rust intermediate instead of exposing a separate antigravity format enum"
   ]
 }
