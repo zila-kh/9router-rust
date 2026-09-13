@@ -34,8 +34,9 @@ Both commands:
 4. start Rust as the only public listener;
 5. keep login, session enforcement, health, and parity reporting native in Rust;
 6. send other dashboard management APIs through the pinned upstream handlers for exact response shapes and current feature coverage;
-7. initialize upstream background/runtime services only in secured compatibility mode;
-8. make Rust and Next use the same data directory and SQLite database.
+7. selectively map the still-unported `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**` families to their pinned upstream handlers;
+8. initialize upstream background/runtime services only in secured compatibility mode;
+9. make Rust and Next use the same data directory and SQLite database.
 
 Inspect `x-9router-runtime` on API responses:
 
@@ -47,6 +48,8 @@ The internal Next listener rejects `/api`, `/v1`, `/v1beta`, `/responses`, and `
 
 Rust mirrors upstream route security classes before delegation. Normal dashboard APIs require a dashboard session or the upstream-compatible `x-9r-cli-token`; update, shutdown, and database operations require a valid session or CLI token even when dashboard login is disabled. Host-control operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom control require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse proxy hop from being mistaken for a local user.
 
+Public model APIs keep Rust authentication at the outer boundary. Core chat, model-list, embeddings, audio, image, Responses, Claude, Gemini, and Codex paths remain native. Compatibility mode delegates only the currently unported video generation/status/download/cancel, search, and web-fetch paths. These responses are visibly marked `x-9router-runtime: upstream-compat` and are not counted as native parity.
+
 The proxy does not follow HTTP redirects. OIDC, SAML, login, and other redirect responses are returned to the browser with the original public host and protocol preserved.
 
 ## Run strict native-only mode
@@ -57,7 +60,7 @@ Use strict mode to find remaining Rust parity gaps:
 ./scripts/run-full-stack-strict.sh
 ```
 
-Strict mode sets `NINEROUTER_COMPAT_API=0` and disables the legacy bridge. Unported management endpoints return a Rust 404/405/501 rather than reaching Next, and the retained upstream runtime bootstrap remains disabled.
+Strict mode sets `NINEROUTER_COMPAT_API=0` and disables the legacy bridge. Unported management and public model endpoints return a Rust 404/405/501 rather than reaching Next, and the retained upstream runtime bootstrap remains disabled.
 
 ## Configuration
 
@@ -91,7 +94,7 @@ Full-stack checks:
 ./scripts/full-stack-smoke-v2.sh http://127.0.0.1:20128
 ```
 
-The first smoke test verifies Rust-owned login and health, exact upstream dashboard API routing, protected and upstream-only endpoints, browser redirect passthrough, and rejection of direct internal API access. The second verifies strict native-only behavior.
+The first smoke test verifies Rust-owned login and health, exact upstream dashboard API routing, protected and upstream-only endpoints, upstream CLI-token access, browser redirect passthrough, the upstream 0.5.75 video route, and rejection of direct internal API access. The second verifies strict native-only behavior.
 
 ## Update the pinned upstream source
 
