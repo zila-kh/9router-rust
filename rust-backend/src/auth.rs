@@ -168,21 +168,12 @@ pub fn has_valid_cli_token(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(raw_machine_id) = read_nonempty(state.config.data_dir.join("machine-id")) else {
         return false;
     };
-    let Some(cli_secret) = read_nonempty(
-        state
-            .config
-            .data_dir
-            .join("auth")
-            .join("cli-secret"),
-    ) else {
+    let Some(cli_secret) = read_nonempty(state.config.data_dir.join("auth").join("cli-secret"))
+    else {
         return false;
     };
     let expected = derive_cli_token(&raw_machine_id, &cli_secret);
-    expected
-        .as_bytes()
-        .ct_eq(supplied.as_bytes())
-        .unwrap_u8()
-        == 1
+    expected.as_bytes().ct_eq(supplied.as_bytes()).unwrap_u8() == 1
 }
 
 fn read_nonempty(path: std::path::PathBuf) -> Option<String> {
