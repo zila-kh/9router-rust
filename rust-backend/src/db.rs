@@ -955,7 +955,7 @@ mod tests {
     #[test]
     fn combo_upsert_returns_the_persisted_identifier() {
         let temp = tempfile::tempdir().expect("temporary directory");
-        let db = Db::open(temp.path().join("data.sqlite")).expect("open test database");
+        let db = Db::open(&temp.path().join("data.sqlite")).expect("open test database");
         let first = db
             .upsert_combo(json!({"name":"stable","models":["one"]}))
             .expect("insert combo");

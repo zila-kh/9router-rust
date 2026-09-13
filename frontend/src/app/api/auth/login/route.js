@@ -12,7 +12,13 @@ const RESET_HINT = "Forgot password? Reset to default via 9Router CLI → Settin
 const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
 
 function isTunnelRequest(request, settings) {
-  const host = (request.headers.get("host") || "").split(":")[0].toLowerCase();
+  let host = "";
+  const authority = request.headers.get("host") || "";
+  try {
+    host = new URL(`http://${authority}`).hostname.toLowerCase();
+  } catch {
+    host = "";
+  }
   const tunnelHost = settings.tunnelUrl ? new URL(settings.tunnelUrl).hostname.toLowerCase() : "";
   const tailscaleHost = settings.tailscaleUrl ? new URL(settings.tailscaleUrl).hostname.toLowerCase() : "";
   return (tunnelHost && host === tunnelHost) || (tailscaleHost && host === tailscaleHost);

@@ -88,8 +88,8 @@ fn is_ipv4_mapped_loopback(ip: IpAddr) -> bool {
 
 fn strip_ipv6_brackets(value: &str) -> &str {
     value
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
+        .strip_prefix("[")
+        .and_then(|value| value.strip_suffix("]"))
         .unwrap_or(value)
 }
 
@@ -122,9 +122,12 @@ pub fn is_direct_loopback_request(peer: SocketAddr, headers: &HeaderMap) -> bool
 }
 
 pub fn rate_limit_ip(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
-    let trust_proxy = std::env::var("TRUST_PROXY")
-        .ok()
-        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+    let trust_proxy = std::env::var("TRUST_PROXY").ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
     if trust_proxy && is_loopback(peer) {
         for name in ["x-forwarded-for", "x-real-ip"] {
             let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) else {
@@ -172,7 +175,10 @@ fn jwt_secret(state: &AppState) -> Result<Vec<u8>, AppError> {
     let mut bytes = [0u8; 32];
     use rand::RngCore;
     rand::rng().fill_bytes(&mut bytes);
-    let generated = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let generated = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
 
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -440,7 +446,11 @@ pub fn secure_cookie(headers: &HeaderMap) -> bool {
 }
 
 pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
-    let secure = if secure_cookie(headers) { "; Secure" } else { "" };
+    let secure = if secure_cookie(headers) {
+        "; Secure"
+    } else {
+        ""
+    };
     HeaderValue::from_str(&format!(
         "auth_token={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400{secure}"
     ))
@@ -448,7 +458,11 @@ pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
 }
 
 pub fn clear_session_cookie_header(headers: &HeaderMap) -> HeaderValue {
-    let secure = if secure_cookie(headers) { "; Secure" } else { "" };
+    let secure = if secure_cookie(headers) {
+        "; Secure"
+    } else {
+        ""
+    };
     HeaderValue::from_str(&format!(
         "auth_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"
     ))
@@ -479,7 +493,10 @@ mod tests {
             header::AUTHORIZATION,
             HeaderValue::from_static("bearer test-token"),
         );
-        assert_eq!(extract_api_key(&headers, None).as_deref(), Some("test-token"));
+        assert_eq!(
+            extract_api_key(&headers, None).as_deref(),
+            Some("test-token")
+        );
 
         headers.remove(header::AUTHORIZATION);
         headers.insert("x-api-key", HeaderValue::from_static("  key-123  "));
@@ -494,11 +511,17 @@ mod tests {
     fn direct_loopback_rejects_proxy_hops_and_remote_origins() {
         let headers = HeaderMap::new();
         assert!(is_direct_loopback_request(peer("127.0.0.1:1234"), &headers));
-        assert!(!is_direct_loopback_request(peer("192.0.2.20:1234"), &headers));
+        assert!(!is_direct_loopback_request(
+            peer("192.0.2.20:1234"),
+            &headers
+        ));
 
         let mut forwarded = HeaderMap::new();
         forwarded.insert("x-forwarded-for", HeaderValue::from_static("192.0.2.20"));
-        assert!(!is_direct_loopback_request(peer("127.0.0.1:1234"), &forwarded));
+        assert!(!is_direct_loopback_request(
+            peer("127.0.0.1:1234"),
+            &forwarded
+        ));
 
         let mut origin = HeaderMap::new();
         origin.insert(
@@ -517,11 +540,11 @@ mod tests {
 
     #[test]
     fn session_header_requires_hs256_jwt() {
-        let valid = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
-        let valid_json = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#.iter().copied().filter(|byte| *byte != b'\\').collect::<Vec<_>>());
-        let wrong_algorithm = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#.iter().copied().filter(|byte| *byte != b'\\').collect::<Vec<_>>());
-        assert!(!valid_session_header(&valid));
-        assert!(valid_session_header(&valid_json));
+        let valid = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+        let wrong_algorithm = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let critical = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","crit":["exp"]}"#);
+        assert!(valid_session_header(&valid));
         assert!(!valid_session_header(&wrong_algorithm));
+        assert!(!valid_session_header(&critical));
     }
 }

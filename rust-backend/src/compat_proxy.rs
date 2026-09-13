@@ -87,7 +87,8 @@ pub async fn proxy_buffered(
         reqwest::header::HeaderName::from_static("x-forwarded-proto"),
         reqwest::header::HeaderValue::from_static(forwarded_proto),
     );
-    if let Ok(value) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
+    let client_ip = auth::rate_limit_ip(peer, headers);
+    if let Ok(value) = reqwest::header::HeaderValue::from_str(&client_ip.to_string()) {
         outbound_headers.insert(
             reqwest::header::HeaderName::from_static("x-9r-real-ip"),
             value.clone(),

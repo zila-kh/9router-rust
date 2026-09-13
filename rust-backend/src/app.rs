@@ -196,13 +196,11 @@ fn is_public_management_request(method: &Method, path: &str) -> bool {
             | ("POST", "/api/auth/login")
             | ("POST", "/api/auth/logout")
             | ("GET", "/api/auth/status")
-    ) || matches!(
-        path,
-        "/api/auth/oidc/start"
-            | "/api/auth/oidc/callback"
-            | "/api/auth/saml/start"
-            | "/api/auth/saml/acs"
-            | "/api/auth/saml/metadata"
+            | ("GET", "/api/auth/oidc/start")
+            | ("GET", "/api/auth/oidc/callback")
+            | ("GET", "/api/auth/saml/start")
+            | ("POST", "/api/auth/saml/acs")
+            | ("GET", "/api/auth/saml/metadata")
     )
 }
 
@@ -305,6 +303,14 @@ mod tests {
         assert!(!is_public_management_request(
             &Method::GET,
             "/api/auth/login"
+        ));
+        assert!(!is_public_management_request(
+            &Method::POST,
+            "/api/auth/oidc/start"
+        ));
+        assert!(!is_public_management_request(
+            &Method::GET,
+            "/api/auth/saml/acs"
         ));
     }
 

@@ -112,8 +112,8 @@ fn validate_loopback_origin(name: &str, value: String) -> anyhow::Result<String>
 
 fn is_loopback_host(host: &str) -> bool {
     let host = host
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
+        .strip_prefix("[")
+        .and_then(|value| value.strip_suffix("]"))
         .unwrap_or(host);
     if host.eq_ignore_ascii_case("localhost") {
         return true;

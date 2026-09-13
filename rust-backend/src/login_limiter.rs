@@ -76,7 +76,9 @@ pub fn check_lock(ip: IpAddr) -> LockStatus {
     let remaining = until.saturating_duration_since(now);
     LockStatus {
         locked: true,
-        retry_after_secs: remaining.as_secs().saturating_add(u64::from(remaining.subsec_nanos() > 0)),
+        retry_after_secs: remaining
+            .as_secs()
+            .saturating_add(u64::from(remaining.subsec_nanos() > 0)),
     }
 }
 

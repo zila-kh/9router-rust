@@ -16,6 +16,20 @@ if (process.env.NINEROUTER_UI_ONLY === "1") {
 }
 
 const origCreate = http.createServer.bind(http);
+const INTERNAL_SECRET_HEADER = "x-9router-ui-secret";
+
+function timingSafeStringEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isLoopbackAddress(value) {
+  let address = String(value || "").trim().toLowerCase();
+  if (address.startsWith("[") && address.endsWith("]")) address = address.slice(1, -1);
+  if (address.startsWith("::ffff:")) address = address.slice(7);
+  return address === "127.0.0.1" || address === "::1" || address === "localhost";
+}
 
 // Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.
 // A bare `next start` / `next dev` never loads this file, so it cannot produce a matching
@@ -68,19 +82,27 @@ http.createServer = (...args) => {
     const socketIp = req.socket && req.socket.remoteAddress ? req.socket.remoteAddress : "";
     const xff = req.headers["x-forwarded-for"];
     const xRealIp = req.headers["x-real-ip"];
-    const viaProxy = !!(xff || xRealIp);
-    const isLoopbackProxy = socketIp === "127.0.0.1" || socketIp === "::1" || socketIp === "::ffff:127.0.0.1";
-    // Trust forwarding headers only when the TCP peer is a local reverse proxy.
-    // Direct/public sockets remain keyed by the unspoofable peer address.
-    const proxyIp = xRealIp || (xff ? String(xff).split(",")[0].trim() : "");
-    const ip = isLoopbackProxy && proxyIp ? proxyIp : socketIp;
+    const configuredSecret = process.env.NINEROUTER_UI_SECRET || "";
+    const suppliedSecret = req.headers[INTERNAL_SECRET_HEADER] || "";
+    const isLoopbackProxy = isLoopbackAddress(socketIp);
+    const trustedRustProxy = isLoopbackProxy
+      && configuredSecret
+      && timingSafeStringEqual(suppliedSecret, configuredSecret);
+    const proxyIp = trustedRustProxy
+      ? (xRealIp || (xff ? String(xff).split(",")[0].trim() : ""))
+      : "";
+    const ip = proxyIp || socketIp;
+    const viaProxy = Boolean(trustedRustProxy && proxyIp && !isLoopbackAddress(proxyIp));
     delete req.headers["x-9r-real-ip"];
     delete req.headers["x-forwarded-for"];
+    delete req.headers["x-real-ip"];
     delete req.headers["x-9r-via-proxy"];
     delete req.headers["x-9r-peer-token"];
+    if (!trustedRustProxy) delete req.headers[INTERNAL_SECRET_HEADER];
     req.headers["x-9r-real-ip"] = ip;
     req.headers["x-9r-peer-token"] = PEER_TOKEN;
     if (viaProxy) req.headers["x-9r-via-proxy"] = "1";
+    return handler(req, res);
     return handler(req, res);
   };
   const server = origCreate(...rest, wrapped);

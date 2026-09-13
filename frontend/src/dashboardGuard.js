@@ -20,20 +20,21 @@ async function hasValidCliToken(request) {
 }
 
 // Public API paths — no auth required (LLM API has its own key auth inside handler).
-const PUBLIC_API_PATHS = [
-  "/api/health",
-  "/api/init",
-  "/api/locale",
-  "/api/auth/login",
-  "/api/auth/logout",
-  "/api/auth/status",
-  "/api/auth/oidc/start",
-  "/api/auth/oidc/callback",
-  "/api/auth/saml/start",
-  "/api/auth/saml/acs",
-  "/api/auth/saml/metadata",
-  "/api/version",
-  "/api/settings/require-login",
+const PUBLIC_API_ROUTES = new Set([
+  "GET /api/health",
+  "GET /api/init",
+  "GET /api/locale",
+  "POST /api/auth/login",
+  "POST /api/auth/logout",
+  "GET /api/auth/status",
+  "GET /api/auth/oidc/start",
+  "GET /api/auth/oidc/callback",
+  "GET /api/auth/saml/start",
+  "POST /api/auth/saml/acs",
+  "GET /api/auth/saml/metadata",
+  "GET /api/version",
+  "GET /api/settings/require-login",
+]);
 ];
 
 // Public top-level prefixes (LLM API endpoints with their own API key auth).
@@ -188,9 +189,22 @@ async function isAuthenticated(request) {
   return false;
 }
 
-function isPublicApi(pathname) {
+function isPublicApi(request) {
+  const pathname = request.nextUrl.pathname;
   if (isPublicLlmApi(pathname)) return true;
-  return PUBLIC_API_PATHS.includes(pathname);
+  const method = request.method.toUpperCase();
+  if (PUBLIC_API_ROUTES.has(`${method} ${pathname}`)) return true;
+  return method === "OPTIONS" && [...PUBLIC_API_ROUTES].some((route) => route.endsWith(` ${pathname}`));
+}
+
+function requestHostname(request) {
+  const authority = request.headers.get("host") || "";
+  if (!authority) return "";
+  try {
+    return new URL(`http://${authority}`).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 export const __test__ = {
@@ -199,6 +213,8 @@ export const __test__ = {
   extractApiKey,
   canAccessPublicLlmApi,
   canAccessLocalOnlyRoute,
+  isPublicApi,
+  requestHostname,
 };
 
 export async function proxy(request) {
@@ -225,7 +241,7 @@ export async function proxy(request) {
 
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
   if (pathname.startsWith("/api/")) {
-    if (isPublicApi(pathname)) return NextResponse.next();
+    if (isPublicApi(request)) return NextResponse.next();
     if (await hasValidCliToken(request) || await isAuthenticated(request))
       return NextResponse.next();
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -244,7 +260,7 @@ export async function proxy(request) {
 
         // Block tunnel/tailscale access if disabled (redirect to login)
         if (!tunnelDashboardAccess) {
-          const host = (request.headers.get("host") || "").split(":")[0].toLowerCase();
+          const host = requestHostname(request);
           const tunnelHost = settings.tunnelUrl ? new URL(settings.tunnelUrl).hostname.toLowerCase() : "";
           const tailscaleHost = settings.tailscaleUrl ? new URL(settings.tailscaleUrl).hostname.toLowerCase() : "";
           if ((tunnelHost && host === tunnelHost) || (tailscaleHost && host === tailscaleHost)) {

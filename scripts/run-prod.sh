@@ -106,7 +106,8 @@ monitor_stack() {
     component="Rust backend"
   fi
   set -e
-  echo "$component exited with status $status" >&2
+  if [[ "$status" == 0 ]]; then status=1; fi
+  echo "$component exited unexpectedly with status $status" >&2
   return "$status"
 }
 trap cleanup EXIT
