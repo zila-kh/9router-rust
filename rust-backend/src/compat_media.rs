@@ -109,7 +109,10 @@ mod tests {
     fn maps_public_paths_to_internal_next_api_routes() {
         let public = Uri::from_static("/v1/videos/generations?provider=xai");
         let mapped = internal_api_uri(&public).expect("mapped URI");
-        assert_eq!(mapped.to_string(), "/api/v1/videos/generations?provider=xai");
+        assert_eq!(
+            mapped.to_string(),
+            "/api/v1/videos/generations?provider=xai"
+        );
 
         let already_internal = Uri::from_static("/api/v1/search");
         let mapped = internal_api_uri(&already_internal).expect("mapped URI");
