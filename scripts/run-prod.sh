@@ -31,4 +31,4 @@ cargo build --release --locked --manifest-path rust-backend/Cargo.toml
 cleanup(){ jobs -p | xargs -r kill 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 NINEROUTER_UI_ONLY=1 npm --prefix frontend run start:ui &
-rust-backend/target/release/nine-router-rs
+rust-backend/target/release/9router-rust
