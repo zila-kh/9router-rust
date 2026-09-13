@@ -10,7 +10,6 @@ mod gateway;
 mod legacy_proxy;
 mod management;
 mod media;
-mod metadata;
 mod protocol;
 mod providers;
 mod special;
