@@ -152,14 +152,18 @@ pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         })
 }
 
+pub fn has_valid_dashboard_session(state: &AppState, headers: &HeaderMap) -> bool {
+    cookie(headers, "auth_token")
+        .map(|token| verify_session_token(state, &token))
+        .unwrap_or(false)
+}
+
 pub fn dashboard_authenticated(state: &AppState, headers: &HeaderMap) -> Result<bool, AppError> {
     let settings = state.db.settings()?;
     if settings.get("requireLogin").and_then(Value::as_bool) == Some(false) {
         return Ok(true);
     }
-    Ok(cookie(headers, "auth_token")
-        .map(|t| verify_session_token(state, &t))
-        .unwrap_or(false))
+    Ok(has_valid_dashboard_session(state, headers))
 }
 
 pub fn require_dashboard(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
