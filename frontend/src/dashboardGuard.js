@@ -49,6 +49,7 @@ const ALWAYS_PROTECTED = [
   "/api/version/update",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
+  "/api/oauth/xiaomi-mimo/auto-import",
 ];
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.
@@ -58,6 +59,7 @@ const LOCAL_ONLY_PATHS = [
   "/api/tunnel/",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
+  "/api/oauth/xiaomi-mimo/auto-import",
   "/api/auth/reset-password",
   "/api/headroom/",
   "/api/pxpipe/",
@@ -65,6 +67,15 @@ const LOCAL_ONLY_PATHS = [
   "/api/version/shutdown",
   "/api/version/update",
 ];
+
+const LOCAL_ONLY_OAUTH_ACTIONS = new Set([
+  "ide-status",
+  "manual-code",
+  "poll-status",
+  "register-session",
+  "start-proxy",
+  "stop-proxy",
+]);
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -114,6 +125,17 @@ export function isLocalRequest(request) {
 
 function isPublicLlmApi(pathname) {
   return PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+function isLocalOnlyPath(pathname) {
+  const normalized = String(pathname || "").replace(/\/+$/, "") || "/";
+  if (LOCAL_ONLY_PATHS.some((prefix) => normalized.startsWith(prefix))) return true;
+
+  const match = normalized.match(/^\/api\/oauth\/([^/]+)\/([^/]+)$/);
+  if (!match) return false;
+  const [, provider, action] = match;
+  if (LOCAL_ONLY_OAUTH_ACTIONS.has(action)) return true;
+  return provider === "xiaomi-mimo" && (action === "authorize" || action === "exchange");
 }
 
 function extractApiKey(request) {
@@ -192,6 +214,7 @@ function requestHostname(request) {
 export const __test__ = {
   isLocalRequest,
   isPublicLlmApi,
+  isLocalOnlyPath,
   extractApiKey,
   canAccessPublicLlmApi,
   canAccessLocalOnlyRoute,
@@ -202,7 +225,7 @@ export const __test__ = {
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
 
-  if (LOCAL_ONLY_PATHS.some((prefix) => pathname.startsWith(prefix))) {
+  if (isLocalOnlyPath(pathname)) {
     if (!(await canAccessLocalOnlyRoute(request))) {
       return NextResponse.json({ error: "Local only: CLI token required" }, { status: 403 });
     }
