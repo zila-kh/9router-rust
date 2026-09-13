@@ -1,4 +1,4 @@
-name: Autoformat Rust source
+name: Autoformat and verify Rust source
 
 on:
   push:
@@ -14,9 +14,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  format:
+  format-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,19 +24,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-backend
       - name: Format Rust backend
         run: cargo fmt --manifest-path rust-backend/Cargo.toml --all
-      - name: Commit formatted source
+      - name: Check all Rust targets
+        run: cargo check --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Test all Rust targets
+        run: cargo test --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Commit verified formatting
         shell: bash
         run: |
           if git diff --quiet -- rust-backend; then
-            echo 'Rust source is already formatted.'
+            echo 'Rust source is already formatted and verified.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add rust-backend
-          git commit -m 'Format Rust backend source'
+          git commit -m 'Format and verify Rust backend source'
           branch="${GITHUB_REF_NAME}"
           git fetch origin "$branch"
           git rebase "origin/$branch"
