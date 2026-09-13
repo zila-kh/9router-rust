@@ -27,9 +27,7 @@ impl Config {
             Err(error) => return Err(error).context("NINEROUTER_HOST is not valid Unicode"),
         };
         let port = match env::var("PORT") {
-            Ok(value) => value
-                .parse::<u16>()
-                .with_context(|| format!("invalid PORT value: {value}"))?,
+            Ok(value) => parse_port("PORT", &value)?,
             Err(env::VarError::NotPresent) => 20128,
             Err(error) => return Err(error).context("PORT is not valid Unicode"),
         };
@@ -40,10 +38,14 @@ impl Config {
         let db_path = env::var_os("NINEROUTER_DB_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| data_dir.join("db").join("data.sqlite"));
-        let ui_origin = validate_loopback_origin(
-            "NINEROUTER_UI_ORIGIN",
-            env::var("NINEROUTER_UI_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:20129".into()),
-        )?;
+        let ui_origin_value = match env::var("NINEROUTER_UI_ORIGIN") {
+            Ok(value) => value,
+            Err(env::VarError::NotPresent) => "http://127.0.0.1:20129".into(),
+            Err(error) => {
+                return Err(error).context("NINEROUTER_UI_ORIGIN is not valid Unicode")
+            }
+        };
+        let ui_origin = validate_loopback_origin("NINEROUTER_UI_ORIGIN", ui_origin_value)?;
         let upstream_timeout_secs = match env::var("NINEROUTER_UPSTREAM_TIMEOUT_SECS") {
             Ok(value) => value.parse::<u64>().with_context(|| {
                 format!("invalid NINEROUTER_UPSTREAM_TIMEOUT_SECS value: {value}")
@@ -69,12 +71,18 @@ impl Config {
         let legacy_backend_origin = if env_flag("NINEROUTER_DISABLE_LEGACY_BRIDGE", false)? {
             None
         } else {
-            env::var("NINEROUTER_LEGACY_BACKEND_ORIGIN")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .map(|value| validate_loopback_origin("NINEROUTER_LEGACY_BACKEND_ORIGIN", value))
-                .transpose()?
+            match env::var("NINEROUTER_LEGACY_BACKEND_ORIGIN") {
+                Ok(value) if value.trim().is_empty() => None,
+                Ok(value) => Some(validate_loopback_origin(
+                    "NINEROUTER_LEGACY_BACKEND_ORIGIN",
+                    value,
+                )?),
+                Err(env::VarError::NotPresent) => None,
+                Err(error) => {
+                    return Err(error)
+                        .context("NINEROUTER_LEGACY_BACKEND_ORIGIN is not valid Unicode")
+                }
+            }
         };
         Ok(Self {
             listen: SocketAddr::new(host, port),
@@ -87,6 +95,16 @@ impl Config {
             compat_api_enabled,
         })
     }
+}
+
+fn parse_port(name: &str, value: &str) -> anyhow::Result<u16> {
+    let port = value
+        .parse::<u16>()
+        .with_context(|| format!("invalid {name} value: {value}"))?;
+    if port == 0 {
+        bail!("{name} must be between 1 and 65535");
+    }
+    Ok(port)
 }
 
 fn validate_loopback_origin(name: &str, value: String) -> anyhow::Result<String> {
@@ -172,5 +190,13 @@ mod tests {
         assert!(validate_loopback_origin("TEST", "http://[::1]:20129".into()).is_ok());
         assert!(validate_loopback_origin("TEST", "https://example.com".into()).is_err());
         assert!(validate_loopback_origin("TEST", "http://127.0.0.1:20129/path".into()).is_err());
+    }
+
+    #[test]
+    fn listener_port_must_not_be_zero() {
+        assert_eq!(parse_port("PORT", "20128").unwrap(), 20128);
+        assert!(parse_port("PORT", "0").is_err());
+        assert!(parse_port("PORT", "65536").is_err());
+        assert!(parse_port("PORT", "not-a-port").is_err());
     }
 }
