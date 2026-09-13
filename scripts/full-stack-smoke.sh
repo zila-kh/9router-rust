@@ -23,7 +23,25 @@ request login_page "$BASE/login"
 grep -Eqi '<!doctype html|<html' "$TMP/login_page.body"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/login_page.headers"
 
-# Authenticate through Rust before exercising the internal compatibility API.
+# Public auth redirects must pass through unchanged rather than being followed by
+# Rust's HTTP client. The forwarded host also has to remain the public Rust origin.
+oidc_status="$(curl --silent --show-error \
+  --dump-header "$TMP/oidc.headers" \
+  --output "$TMP/oidc.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/auth/oidc/start")"
+case "$oidc_status" in
+  301|302|303|307|308) ;;
+  *) echo "OIDC start did not return a browser redirect (HTTP $oidc_status)" >&2; exit 1 ;;
+esac
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/oidc.headers"
+oidc_location="$(awk 'BEGIN { IGNORECASE=1 } /^location:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit }' "$TMP/oidc.headers")"
+case "$oidc_location" in
+  "$BASE"/login?error=oidc_not_configured*) ;;
+  *) echo "OIDC redirect lost the public origin: $oidc_location" >&2; exit 1 ;;
+esac
+
+# Authenticate through Rust before exercising protected compatibility APIs.
 curl --silent --show-error --fail-with-body \
   --cookie-jar "$TMP/cookies" \
   --header 'content-type: application/json' \
@@ -47,9 +65,13 @@ request providers --cookie "$TMP/cookies" "$BASE/api/providers"
 grep -Eq '"connections"[[:space:]]*:' "$TMP/providers.body"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/providers.headers"
 
-# /api/tags is not native. It proves that a public compatibility endpoint can
-# reach the retained upstream handler only through the Rust listener.
-request tags "$BASE/api/tags"
+# /api/tags is upstream-only and protected by the same dashboard gate as upstream.
+unauth_tags_status="$(curl --silent --show-error \
+  --output "$TMP/tags-unauth.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/tags")"
+[[ "$unauth_tags_status" == 401 ]]
+request tags --cookie "$TMP/cookies" "$BASE/api/tags"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags.headers"
 grep -Eq '^[[:space:]]*\[' "$TMP/tags.body"
 
