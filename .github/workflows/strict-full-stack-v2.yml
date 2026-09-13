@@ -40,11 +40,12 @@ jobs:
         run: |
           if [[ -f package-lock.json ]]; then npm ci; else npm install --no-audit --no-fund; fi
 
-      - name: Build existing Next/React frontend in UI-only mode
+      - name: Build existing Next/React frontend in strict UI-only mode
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_COMPAT_API: "0"
           NINEROUTER_UI_SECRET: strict-ci-internal-token
         run: npm run build
 
@@ -68,7 +69,11 @@ jobs:
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_COMPAT_API: "0"
+          NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
+          DATA_DIR: ${{ runner.temp }}/9router-data
         run: |
+          mkdir -p "$DATA_DIR"
           nohup npm run start:ui >"${RUNNER_TEMP}/ui.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/ui.pid"
 
@@ -77,6 +82,7 @@ jobs:
           PORT: "20128"
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
+          DATA_DIR: ${{ runner.temp }}/9router-data
           NINEROUTER_DISABLE_LEGACY_BRIDGE: "1"
           NINEROUTER_COMPAT_API: "0"
           NINEROUTER_UI_ONLY: "1"
