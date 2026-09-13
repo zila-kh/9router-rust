@@ -343,6 +343,14 @@ pub fn endpoint(
         .and_then(Value::as_str);
     let mut url = custom
         .or_else(|| t.get("baseUrl").and_then(Value::as_str))
+        // Upstream transports may expose an ordered failover list instead of a
+        // single url (`getBaseUrls()`), e.g. antigravity's `baseUrls: [...]`.
+        .or_else(|| {
+            t.get("baseUrls")
+                .and_then(Value::as_array)
+                .and_then(|urls| urls.first())
+                .and_then(Value::as_str)
+        })
         .unwrap_or("")
         .to_string();
     if url.is_empty() {
