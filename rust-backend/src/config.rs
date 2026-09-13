@@ -13,6 +13,7 @@ pub struct Config {
     pub upstream_timeout_secs: u64,
     pub ui_only_header_secret: String,
     pub legacy_backend_origin: Option<String>,
+    pub compat_api_enabled: bool,
 }
 
 impl Config {
@@ -39,9 +40,14 @@ impl Config {
             .unwrap_or(600);
         let ui_only_header_secret =
             env::var("NINEROUTER_UI_SECRET").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-        let legacy_backend_origin = env::var("NINEROUTER_LEGACY_BACKEND_ORIGIN")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
+        let legacy_backend_origin = if env_flag("NINEROUTER_DISABLE_LEGACY_BRIDGE", false) {
+            None
+        } else {
+            env::var("NINEROUTER_LEGACY_BACKEND_ORIGIN")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        };
+        let compat_api_enabled = env_flag("NINEROUTER_COMPAT_API", false);
         Self {
             listen: SocketAddr::new(host, port),
             ui_origin,
@@ -50,8 +56,25 @@ impl Config {
             upstream_timeout_secs,
             ui_only_header_secret,
             legacy_backend_origin,
+            compat_api_enabled,
         }
     }
+
+    pub fn has_api_fallback(&self) -> bool {
+        self.legacy_backend_origin.is_some() || self.compat_api_enabled
+    }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
 }
 
 fn default_data_dir() -> PathBuf {
