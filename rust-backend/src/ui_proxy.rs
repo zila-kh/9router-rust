@@ -65,6 +65,21 @@ async fn proxy(
                 | "transfer-encoding"
                 | "upgrade"
                 | "content-length"
+                | "forwarded"
+                | "x-forwarded-for"
+                | "x-forwarded-host"
+                | "x-forwarded-proto"
+                | "x-real-ip"
+                | "cf-connecting-ip"
+                | "true-client-ip"
+                | "x-client-ip"
+                | "x-cluster-client-ip"
+                | "x-9router-ui-secret"
+                | "x-9r-rust-compat"
+                | "x-9r-ui-proxy"
+                | "x-9r-real-ip"
+                | "x-9r-peer-token"
+                | "x-9r-via-proxy"
         ) {
             continue;
         }
@@ -83,15 +98,23 @@ async fn proxy(
             );
         }
     }
-    if !h.contains_key(reqwest::header::HeaderName::from_static(
-        "x-forwarded-proto",
-    )) {
-        h.insert(
-            reqwest::header::HeaderName::from_static("x-forwarded-proto"),
-            reqwest::header::HeaderValue::from_static("http"),
-        );
-    }
-    if let Ok(v) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
+    let forwarded_proto = if auth::is_loopback(peer)
+        && parts
+            .headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+    {
+        "https"
+    } else {
+        "http"
+    };
+    h.insert(
+        reqwest::header::HeaderName::from_static("x-forwarded-proto"),
+        reqwest::header::HeaderValue::from_static(forwarded_proto),
+    );
+    let client_ip = auth::rate_limit_ip(peer, &parts.headers);
+    if let Ok(v) = reqwest::header::HeaderValue::from_str(&client_ip.to_string()) {
         h.insert(
             reqwest::header::HeaderName::from_static("x-9r-real-ip"),
             v.clone(),
@@ -101,9 +124,21 @@ async fn proxy(
             v,
         );
     }
+    let secret = state.config.ui_only_header_secret.trim();
+    if secret.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "NINEROUTER_UI_SECRET must not be empty"
+        )));
+    }
+    h.insert(
+        reqwest::header::HeaderName::from_static("x-9router-ui-secret"),
+        reqwest::header::HeaderValue::from_str(secret).map_err(|error| {
+            AppError::Internal(anyhow::anyhow!("invalid NINEROUTER_UI_SECRET: {error}"))
+        })?,
+    );
     h.insert(
         reqwest::header::HeaderName::from_static("x-9r-ui-proxy"),
-        reqwest::header::HeaderValue::from_static("rust-1.0.1"),
+        reqwest::header::HeaderValue::from_static(concat!("rust-", env!("CARGO_PKG_VERSION"))),
     );
     rb = rb.headers(h);
     let r = rb.send().await.map_err(|e| {
@@ -135,6 +170,17 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
                 | "transfer-encoding"
                 | "upgrade"
                 | "content-length"
+                | "forwarded"
+                | "x-forwarded-for"
+                | "x-forwarded-host"
+                | "x-forwarded-proto"
+                | "x-real-ip"
+                | "x-9router-ui-secret"
+                | "x-9r-rust-compat"
+                | "x-9r-ui-proxy"
+                | "x-9r-real-ip"
+                | "x-9r-peer-token"
+                | "x-9r-via-proxy"
         ) {
             continue;
         }

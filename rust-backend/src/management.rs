@@ -7,9 +7,11 @@ use axum::{
 };
 use serde_json::{json, Map, Value};
 
-use crate::{auth, error::AppError, providers, state::AppState};
+use crate::{auth, error::AppError, login_limiter, providers, state::AppState};
 
 const MAX_BODY: usize = 128 * 1024 * 1024;
+const RESET_HINT: &str =
+    "Forgot password? Reset to default via 9Router CLI -> Settings -> Reset Password to Default.";
 
 pub async fn handle(
     state: AppState,
@@ -20,7 +22,7 @@ pub async fn handle(
     let method = req.method().clone();
     let headers = req.headers().clone();
     let uri = req.uri().clone();
-    if !is_public(&path) {
+    if !is_public(&method, &path) {
         auth::require_dashboard(&state, &headers)?;
     }
     if method == Method::GET && path == "/api/proxy-pools" {
@@ -97,18 +99,22 @@ pub async fn handle(
     }
 }
 
-fn is_public(path: &str) -> bool {
+fn is_public(method: &Method, path: &str) -> bool {
     matches!(
-        path,
-        "/api/health"
-            | "/api/init"
-            | "/api/version"
-            | "/api/auth/login"
-            | "/api/auth/logout"
-            | "/api/auth/status"
-            | "/api/settings/require-login"
-    ) || path.starts_with("/api/auth/oidc")
-        || path.starts_with("/api/auth/saml")
+        (method.as_str(), path),
+        ("GET", "/api/health")
+            | ("GET", "/api/init")
+            | ("GET", "/api/version")
+            | ("POST", "/api/auth/login")
+            | ("POST", "/api/auth/logout")
+            | ("GET", "/api/auth/status")
+            | ("GET", "/api/settings/require-login")
+            | ("GET", "/api/auth/oidc/start")
+            | ("GET", "/api/auth/oidc/callback")
+            | ("GET", "/api/auth/saml/start")
+            | ("POST", "/api/auth/saml/acs")
+            | ("GET", "/api/auth/saml/metadata")
+    )
 }
 
 async fn dispatch(
@@ -122,15 +128,15 @@ async fn dispatch(
     match (method.as_str(), path) {
         ("GET", "/api/health") => json_response(
             StatusCode::OK,
-            json!({"status":"ok","version":"1.0.1","runtime":"rust","upstreamSnapshot":"eb712ca821f0ba6bc41043fbd14494c5af5daba5"}),
+            json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"runtime":"rust","upstreamSnapshot":"17c4cc76877bd1755030a8414f8d0083f48dcccf"}),
         ),
         ("GET", "/api/init") => json_response(
             StatusCode::OK,
-            json!({"initialized":true,"runtime":"rust","version":"1.0.1"}),
+            json!({"initialized":true,"runtime":"rust","version":env!("CARGO_PKG_VERSION")}),
         ),
         ("GET", "/api/version") => json_response(
             StatusCode::OK,
-            json!({"version":"1.0.1","name":"9router-rust","rustBackend":true,"upstreamVersion":"0.5.69"}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"name":"9router-rust","rustBackend":true,"upstreamVersion":"0.5.75"}),
         ),
         ("GET", "/api/rust/parity") => json_response(
             StatusCode::OK,
@@ -144,9 +150,9 @@ async fn dispatch(
             )
         }
         ("POST", "/api/auth/login") => login(state, peer, headers, body),
-        ("POST", "/api/auth/logout") => logout(),
+        ("POST", "/api/auth/logout") => logout(headers),
         ("GET", "/api/auth/status") => auth_status(state, headers),
-        ("POST", "/api/auth/reset-password") => reset_password(state, peer),
+        ("POST", "/api/auth/reset-password") => reset_password(state, peer, headers),
         ("GET", "/api/settings") => settings_get(state),
         ("PATCH", "/api/settings") | ("PUT", "/api/settings") => settings_update(state, body),
         ("GET", "/api/settings/database") => settings_database_get(state, headers),
@@ -189,75 +195,188 @@ fn login(
     headers: &HeaderMap,
     body: Value,
 ) -> Result<Response<Body>, AppError> {
-    let password = body.get("password").and_then(Value::as_str).unwrap_or("");
-    if !auth::verify_password(state, password)? {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            json!({"error":"Invalid password"}),
+    let ip = auth::rate_limit_ip(peer, headers);
+    let lock = login_limiter::check_lock(ip);
+    if lock.locked {
+        return login_locked_response(lock.retry_after_secs);
+    }
+
+    let settings = state.db.settings()?;
+    if is_tunnel_request(headers, &settings)
+        && settings
+            .get("tunnelDashboardAccess")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return json_response_no_store(
+            StatusCode::FORBIDDEN,
+            json!({"error":"Dashboard access via tunnel is disabled"}),
         );
     }
-    let settings = state.db.settings()?;
+    if let Some(message) = password_login_disabled(&settings) {
+        return json_response_no_store(StatusCode::FORBIDDEN, json!({"error":message}));
+    }
+
+    let password = body.get("password").and_then(Value::as_str).unwrap_or("");
+    if !auth::verify_password(state, password)? {
+        let remaining = login_limiter::record_failure(ip);
+        let post_lock = login_limiter::check_lock(ip);
+        if post_lock.locked {
+            return login_locked_response(post_lock.retry_after_secs);
+        }
+        return json_response_no_store(
+            StatusCode::UNAUTHORIZED,
+            json!({
+                "error":format!("Invalid password. {remaining} attempt(s) left before lockout."),
+                "remainingBeforeLock":remaining
+            }),
+        );
+    }
+    login_limiter::record_success(ip);
+
     let stored = settings
         .get("password")
         .and_then(Value::as_str)
-        .filter(|s| !s.is_empty());
-    let env_initial = std::env::var("INITIAL_PASSWORD").ok();
-    if stored.is_none() && env_initial.is_none() && !auth::is_loopback(peer) {
-        return json_response(
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let env_initial = std::env::var("INITIAL_PASSWORD")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if stored.is_none() && env_initial.is_none() && !auth::is_direct_loopback_request(peer, headers)
+    {
+        return json_response_no_store(
             StatusCode::FORBIDDEN,
             json!({"success":false,"error":"Default password must be changed before remote access. Change it from the local machine (or set INITIAL_PASSWORD).","mustChangePassword":true}),
         );
     }
+
     let token = auth::create_session_token(state, Map::new())?;
-    let mut r = json_response(
+    let mut response = json_response_no_store(
         StatusCode::OK,
         json!({"success":true,"mustChangePassword":false}),
     )?;
-    r.headers_mut().append(
+    response.headers_mut().append(
         header::SET_COOKIE,
         auth::session_cookie_header(headers, &token),
     );
-    Ok(r)
+    Ok(response)
 }
-fn logout() -> Result<Response<Body>, AppError> {
-    let mut r = json_response(StatusCode::OK, json!({"success":true}))?;
-    r.headers_mut().append(
+
+fn logout(headers: &HeaderMap) -> Result<Response<Body>, AppError> {
+    let mut response = json_response_no_store(StatusCode::OK, json!({"success":true}))?;
+    response.headers_mut().append(
         header::SET_COOKIE,
-        HeaderValue::from_static("auth_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"),
+        auth::clear_session_cookie_header(headers),
     );
-    Ok(r)
+    Ok(response)
 }
+
 fn auth_status(state: &AppState, headers: &HeaderMap) -> Result<Response<Body>, AppError> {
-    let s = state.db.settings()?;
+    let settings = state.db.settings()?;
     let authenticated = auth::cookie(headers, "auth_token")
-        .map(|t| auth::verify_session_token(state, &t))
+        .map(|token| auth::verify_session_token(state, &token))
         .unwrap_or(false);
-    let oidc = s
-        .get("oidcIssuerUrl")
-        .and_then(Value::as_str)
-        .map(|x| !x.trim().is_empty())
-        .unwrap_or(false)
-        && s.get("oidcClientId")
-            .and_then(Value::as_str)
-            .map(|x| !x.trim().is_empty())
-            .unwrap_or(false);
-    let saml = s
-        .get("samlEntryPoint")
-        .and_then(Value::as_str)
-        .map(|x| !x.trim().is_empty())
-        .unwrap_or(false)
-        && s.get("samlCert")
-            .and_then(Value::as_str)
-            .map(|x| !x.trim().is_empty())
-            .unwrap_or(false);
-    json_response(
+    let oidc = oidc_configured(&settings);
+    let saml = saml_configured(&settings);
+    json_response_no_store(
         StatusCode::OK,
-        json!({"requireLogin":s.get("requireLogin").and_then(Value::as_bool).unwrap_or(true),"authMode":s.get("authMode").cloned().unwrap_or(json!("password")),"ssoType":s.get("ssoType").cloned().unwrap_or(json!("oidc")),"oidcConfigured":oidc,"oidcLoginLabel":s.get("oidcLoginLabel").cloned().unwrap_or(json!("Sign in with OIDC")),"samlConfigured":saml,"samlLoginLabel":s.get("samlLoginLabel").cloned().unwrap_or(json!("Sign in with SAML SSO")),"hasPassword":s.get("password").and_then(Value::as_str).map(|x|!x.is_empty()).unwrap_or(false),"displayName":"Password user","loginMethod":"Password","authenticated":authenticated,"oidcName":null,"oidcEmail":null,"oidcLogin":false,"samlName":null,"samlEmail":null,"samlLogin":false}),
+        json!({"requireLogin":settings.get("requireLogin").and_then(Value::as_bool).unwrap_or(true),"authMode":settings.get("authMode").cloned().unwrap_or(json!("password")),"ssoType":settings.get("ssoType").cloned().unwrap_or(json!("oidc")),"oidcConfigured":oidc,"oidcLoginLabel":settings.get("oidcLoginLabel").cloned().unwrap_or(json!("Sign in with OIDC")),"samlConfigured":saml,"samlLoginLabel":settings.get("samlLoginLabel").cloned().unwrap_or(json!("Sign in with SAML SSO")),"hasPassword":settings.get("password").and_then(Value::as_str).is_some_and(|value|!value.trim().is_empty()),"displayName":"Password user","loginMethod":"Password","authenticated":authenticated,"oidcName":null,"oidcEmail":null,"oidcLogin":false,"samlName":null,"samlEmail":null,"samlLogin":false}),
     )
 }
 
-fn reset_password(state: &AppState, peer: SocketAddr) -> Result<Response<Body>, AppError> {
-    if !auth::is_loopback(peer) {
+fn login_locked_response(retry_after_secs: u64) -> Result<Response<Body>, AppError> {
+    let mut response = json_response_no_store(
+        StatusCode::TOO_MANY_REQUESTS,
+        json!({
+            "error":format!("Too many failed attempts. Try again in {retry_after_secs}s. {RESET_HINT}"),
+            "retryAfter":retry_after_secs,
+            "resetHint":RESET_HINT
+        }),
+    )?;
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        HeaderValue::from_str(&retry_after_secs.to_string())
+            .map_err(|error| AppError::Internal(error.into()))?,
+    );
+    Ok(response)
+}
+
+fn password_login_disabled(settings: &Value) -> Option<&'static str> {
+    let mode = settings
+        .get("authMode")
+        .and_then(Value::as_str)
+        .unwrap_or("password");
+    if !matches!(mode, "sso" | "saml" | "oidc") {
+        return None;
+    }
+    let sso_type = settings
+        .get("ssoType")
+        .and_then(Value::as_str)
+        .unwrap_or(if mode == "saml" { "saml" } else { "oidc" });
+    match sso_type {
+        "saml" if saml_configured(settings) => {
+            Some("Password login is disabled. Use SAML SSO sign in.")
+        }
+        "oidc" if oidc_configured(settings) => {
+            Some("Password login is disabled. Use OIDC sign in.")
+        }
+        _ => None,
+    }
+}
+
+fn nonempty_setting(settings: &Value, key: &str) -> bool {
+    settings
+        .get(key)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn oidc_configured(settings: &Value) -> bool {
+    nonempty_setting(settings, "oidcIssuerUrl")
+        && nonempty_setting(settings, "oidcClientId")
+        && nonempty_setting(settings, "oidcClientSecret")
+}
+
+fn saml_configured(settings: &Value) -> bool {
+    nonempty_setting(settings, "samlEntryPoint") && nonempty_setting(settings, "samlCert")
+}
+
+fn is_tunnel_request(headers: &HeaderMap, settings: &Value) -> bool {
+    let Some(host) = request_hostname(headers) else {
+        return false;
+    };
+    ["tunnelUrl", "tailscaleUrl"].iter().any(|key| {
+        settings
+            .get(*key)
+            .and_then(Value::as_str)
+            .and_then(|value| url::Url::parse(value).ok())
+            .and_then(|value| value.host_str().map(str::to_string))
+            .is_some_and(|configured| configured.eq_ignore_ascii_case(&host))
+    })
+}
+
+fn request_hostname(headers: &HeaderMap) -> Option<String> {
+    let authority = headers
+        .get(header::HOST)?
+        .to_str()
+        .ok()?
+        .parse::<axum::http::uri::Authority>()
+        .ok()?;
+    Some(
+        authority
+            .host()
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase(),
+    )
+}
+
+fn reset_password(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, AppError> {
+    if !auth::is_direct_loopback_request(peer, headers) {
         return Err(AppError::Forbidden("Local only".into()));
     }
     state.db.update_settings(json!({"password": null}))?;
@@ -523,34 +642,80 @@ fn settings_get(state: &AppState) -> Result<Response<Body>, AppError> {
     json_response(StatusCode::OK, json!({"settings":s}))
 }
 fn settings_update(state: &AppState, mut body: Value) -> Result<Response<Body>, AppError> {
-    if let Some(p) = body
-        .get("password")
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("Invalid settings payload".into()))?;
+
+    object.remove("password");
+    object.remove("mitmSudoEncrypted");
+    let new_password = object
+        .remove("newPassword")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let current_password = object
+        .remove("currentPassword")
+        .and_then(|value| value.as_str().map(str::to_string));
+
+    if object
+        .get("oidcClientSecret")
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .is_some_and(|value| value.trim().is_empty())
     {
-        if !p.is_empty() && !p.starts_with("$2") {
-            body["password"] = json!(bcrypt::hash(p, 12)
-                .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?)
+        object.remove("oidcClientSecret");
+    }
+
+    if let Some(new_password) = new_password {
+        let settings = state.db.settings()?;
+        let has_stored_password = settings
+            .get("password")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+        if has_stored_password {
+            let Some(current_password) = current_password.as_deref() else {
+                return json_response_no_store(
+                    StatusCode::BAD_REQUEST,
+                    json!({"error":"Current password required"}),
+                );
+            };
+            if !auth::verify_password(state, current_password)? {
+                return json_response_no_store(
+                    StatusCode::UNAUTHORIZED,
+                    json!({"error":"Invalid current password"}),
+                );
+            }
+        } else if let Some(current_password) = current_password
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            if !auth::verify_password(state, current_password)? {
+                return json_response_no_store(
+                    StatusCode::UNAUTHORIZED,
+                    json!({"error":"Invalid current password"}),
+                );
+            }
+        }
+        object.insert(
+            "password".into(),
+            json!(bcrypt::hash(new_password, 10)
+                .map_err(|error| AppError::Internal(anyhow::anyhow!(error.to_string())))?),
+        );
+    }
+
+    let settings = state.db.update_settings(body)?;
+    let mut safe = settings.clone();
+    if let Some(object) = safe.as_object_mut() {
+        for key in ["password", "oidcClientSecret"] {
+            object.remove(key);
         }
     }
-    let s = state.db.update_settings(body)?;
-    let mut safe = s.clone();
-    if let Some(o) = safe.as_object_mut() {
-        for k in ["password", "oidcClientSecret"] {
-            o.remove(k);
-        }
-    }
-    json_response(StatusCode::OK, json!({"settings":safe,"success":true}))
+    json_response_no_store(StatusCode::OK, json!({"settings":safe,"success":true}))
 }
 
 fn providers_get(state: &AppState) -> Result<Response<Body>, AppError> {
     let mut cs = state.db.provider_connections(None, None)?;
-    for c in &mut cs {
-        if let Some(o) = c.as_object_mut() {
-            for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
-                o.remove(k);
-            }
-        }
+    for connection in &mut cs {
+        redact_secrets(connection);
     }
     json_response(StatusCode::OK, json!({"connections":cs}))
 }
@@ -576,11 +741,7 @@ fn providers_post(state: &AppState, mut body: Value) -> Result<Response<Body>, A
             .unwrap_or(json!(provider.clone()))
     }
     let mut c = state.db.create_connection(body)?;
-    if let Some(o) = c.as_object_mut() {
-        for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
-            o.remove(k);
-        }
-    }
+    redact_secrets(&mut c);
     json_response(StatusCode::CREATED, json!({"connection":c}))
 }
 
@@ -966,19 +1127,16 @@ fn dynamic(
     if let Some(id) = path.strip_prefix("/api/providers/") {
         return match method.as_str() {
             "GET" => {
-                let c = state
+                let mut c = state
                     .db
                     .provider_connection(id)?
                     .ok_or_else(|| AppError::NotFound("provider connection".into()))?;
+                redact_secrets(&mut c);
                 json_response(StatusCode::OK, json!({"connection":c}))
             }
             "PATCH" | "PUT" => {
                 let mut c = state.db.update_connection(id, body)?;
-                if let Some(o) = c.as_object_mut() {
-                    for k in ["apiKey", "accessToken", "refreshToken", "idToken"] {
-                        o.remove(k);
-                    }
-                }
+                redact_secrets(&mut c);
                 json_response(StatusCode::OK, json!({"connection":c}))
             }
             "DELETE" => json_response(
@@ -1015,6 +1173,51 @@ fn dynamic(
     Err(AppError::NotFound(format!(
         "Rust API route not implemented: {method} {path}"
     )))
+}
+
+fn redact_secrets(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.retain(|key, _| {
+                !matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "apikey"
+                        | "api_key"
+                        | "accesstoken"
+                        | "refreshtoken"
+                        | "idtoken"
+                        | "authtoken"
+                        | "sessiontoken"
+                        | "accounttoken"
+                        | "password"
+                        | "clientsecret"
+                        | "client_secret"
+                        | "privatekey"
+                        | "private_key"
+                        | "cookie"
+                        | "authorization"
+                        | "token"
+                )
+            });
+            for child in object.values_mut() {
+                redact_secrets(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_secrets(item);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn json_response_no_store(status: StatusCode, value: Value) -> Result<Response<Body>, AppError> {
+    let mut response = json_response(status, value)?;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, AppError> {

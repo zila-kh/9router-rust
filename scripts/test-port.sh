@@ -6,6 +6,18 @@ command -v cargo >/dev/null || { echo 'error: cargo not found' >&2; exit 127; }
 command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
 command -v node >/dev/null || { echo 'error: node not found' >&2; exit 127; }
 python3 ./scripts/static-audit.py
+for script in ./scripts/run-dev.sh ./scripts/run-prod.sh ./scripts/materialize-frontend.sh; do
+  bash -n "$script"
+done
+if PORT=0 bash ./scripts/run-prod.sh . >/dev/null 2>&1; then
+  echo 'error: production launcher accepted PORT=0' >&2
+  exit 1
+fi
+if PORT=20129 NINEROUTER_UI_PORT=20129 bash ./scripts/run-dev.sh . >/dev/null 2>&1; then
+  echo 'error: development launcher accepted colliding ports' >&2
+  exit 1
+fi
+bash ./scripts/test-frontend-materialization.sh
 cargo fmt --manifest-path rust-backend/Cargo.toml --all -- --check
 cargo check --locked --all-targets --manifest-path rust-backend/Cargo.toml
 cargo test --locked --all-targets --manifest-path rust-backend/Cargo.toml

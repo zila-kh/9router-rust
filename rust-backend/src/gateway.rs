@@ -106,21 +106,7 @@ pub(crate) fn authorize_llm(
     headers: &HeaderMap,
     query_key: Option<&str>,
 ) -> Result<(), AppError> {
-    let settings = state.db.settings()?;
-    let local = auth::is_loopback_ip(peer.ip());
-    let require = !local
-        || settings
-            .get("requireApiKey")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-    if !require {
-        return Ok(());
-    }
-    let key = auth::extract_api_key(headers, query_key);
-    match key {
-        Some(k) if state.db.validate_api_key(&k)? => Ok(()),
-        _ => Err(AppError::Unauthorized),
-    }
+    auth::require_llm(state, headers, peer, query_key)
 }
 
 fn is_models_path(path: &str) -> bool {

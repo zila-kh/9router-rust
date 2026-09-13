@@ -23,6 +23,7 @@ mod db;
 mod error;
 mod gateway;
 mod legacy_proxy;
+mod login_limiter;
 mod management;
 mod media;
 mod protocol;
@@ -33,10 +34,12 @@ mod streaming;
 mod translate;
 mod ui_proxy;
 
+use anyhow::bail;
 use config::Config;
 use db::Db;
+use serde_json::{json, Value};
 use state::AppState;
-use std::net::SocketAddr;
+use std::{env, net::SocketAddr};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -46,8 +49,9 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "nine_router_rs=info,9router=info".into()),
         )
         .init();
-    let cfg = Config::from_env();
+    let cfg = Config::from_env()?;
     let db = Db::open(&cfg.db_path)?;
+    seed_initial_password(&db)?;
     let addr: SocketAddr = cfg.listen;
     let state = AppState::new(cfg, db)?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -63,5 +67,26 @@ async fn main() -> anyhow::Result<()> {
         app::router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await?;
+    Ok(())
+}
+
+fn seed_initial_password(db: &Db) -> anyhow::Result<()> {
+    let initial_password = match env::var("INITIAL_PASSWORD") {
+        Ok(value) if value.trim().is_empty() => bail!("INITIAL_PASSWORD must not be empty"),
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let settings = db.settings()?;
+    let has_stored_password = settings
+        .get("password")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    if has_stored_password {
+        return Ok(());
+    }
+
+    let password_hash = bcrypt::hash(initial_password.trim(), 12)?;
+    db.update_settings(json!({"password":password_hash}))?;
     Ok(())
 }

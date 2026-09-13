@@ -86,7 +86,10 @@ for _ in {1..80}; do
 done
 curl -fsS http://127.0.0.1:18080/ >/dev/null
 
-NINEROUTER_UI_ONLY=1 npm --prefix frontend run start:ui >"$UI_LOG" 2>&1 &
+(
+  cd frontend
+  exec env NINEROUTER_UI_ONLY=1 node .next/standalone/custom-server.js
+) >"$UI_LOG" 2>&1 &
 for _ in {1..120}; do
   curl -fsS http://127.0.0.1:20129/login >/dev/null 2>&1 && break
   sleep 0.25
@@ -98,6 +101,7 @@ PORT=20128 \
 NINEROUTER_UI_ORIGIN=http://127.0.0.1:20129 \
 NINEROUTER_DATA_DIR="$TMP/data" \
 NINEROUTER_DB_PATH="$TMP/data/db/data.sqlite" \
+INITIAL_PASSWORD=e2e-initial-password \
 rust-backend/target/debug/9router-rust >"$RUST_LOG" 2>&1 &
 
 for _ in {1..120}; do
@@ -114,12 +118,27 @@ test "$PRIVATE_CODE" = 421
 grep -q 'RUST_BACKEND_REQUIRED' "$TMP/private-api.json"
 
 curl -fsS -c "$COOKIE" -H 'content-type: application/json' \
-  -d '{"password":"123456"}' http://127.0.0.1:20128/api/auth/login >"$TMP/login.json"
+  -d '{"password":"e2e-initial-password"}' http://127.0.0.1:20128/api/auth/login >"$TMP/login.json"
 grep -q '"success":true' "$TMP/login.json"
 curl -fsS -L -b "$COOKIE" http://127.0.0.1:20128/dashboard >"$TMP/dashboard.html"
 grep -qi '<html' "$TMP/dashboard.html"
 curl -fsS -b "$COOKIE" http://127.0.0.1:20128/api/settings >"$TMP/settings.json"
 grep -q '"settings"' "$TMP/settings.json"
+
+curl -fsS -b "$COOKIE" -H 'content-type: application/json' --request PATCH \
+  -d '{"currentPassword":"e2e-initial-password","newPassword":"e2e-new-password"}' \
+  http://127.0.0.1:20128/api/settings >"$TMP/password-change.json"
+grep -q '"success":true' "$TMP/password-change.json"
+
+OLD_LOGIN_CODE=$(curl -sS -o "$TMP/old-password-login.json" -w '%{http_code}' \
+  -H 'content-type: application/json' \
+  -d '{"password":"e2e-initial-password"}' \
+  http://127.0.0.1:20128/api/auth/login)
+test "$OLD_LOGIN_CODE" = 401
+curl -fsS -c "$TMP/new-cookie.txt" -H 'content-type: application/json' \
+  -d '{"password":"e2e-new-password"}' \
+  http://127.0.0.1:20128/api/auth/login >"$TMP/new-password-login.json"
+grep -q '"success":true' "$TMP/new-password-login.json"
 
 curl -fsS -b "$COOKIE" -H 'content-type: application/json' \
   -d '{"name":"e2e"}' http://127.0.0.1:20128/api/keys >"$TMP/key.json"

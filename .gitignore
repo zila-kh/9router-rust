@@ -1,0 +1,11 @@
+# Generated build output
+rust-backend/target/
+target/
+frontend/node_modules/
+frontend/.next/
+
+# Local runtime files
+.env
+.env.*
+!.env.example
+*.log

@@ -17,14 +17,14 @@ impl AppState {
             .timeout(timeout)
             .pool_max_idle_per_host(32)
             .http2_adaptive_window(true)
-            .user_agent("9router-rust/1.0.1")
+            .user_agent(concat!("9router-rust/", env!("CARGO_PKG_VERSION")))
             .build()?;
         let proxy_http = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(32)
             .http2_adaptive_window(true)
             .redirect(Policy::none())
-            .user_agent("9router-rust-proxy/1.0.1")
+            .user_agent(concat!("9router-rust-proxy/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {
             config: Arc::new(config),

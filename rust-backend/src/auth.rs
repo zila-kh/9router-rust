@@ -3,11 +3,13 @@ use axum::http::{header, HeaderMap, HeaderValue};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
+    fs::{self, OpenOptions},
+    io::{ErrorKind, Write},
     net::{IpAddr, SocketAddr},
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
@@ -39,17 +41,31 @@ pub struct SessionClaims {
 }
 
 pub fn extract_api_key(headers: &HeaderMap, query_key: Option<&str>) -> Option<String> {
-    if let Some(v) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(v) = v.strip_prefix("Bearer ") {
-            return Some(v.to_string());
+    if let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    {
+        let mut parts = value.split_whitespace();
+        if let (Some(scheme), Some(token), None) = (parts.next(), parts.next(), parts.next()) {
+            if scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() {
+                return Some(token.to_string());
+            }
         }
     }
     for name in ["x-api-key", "x-goog-api-key"] {
-        if let Some(v) = headers.get(name).and_then(|v| v.to_str().ok()) {
-            return Some(v.to_string());
+        if let Some(value) = headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
         }
     }
-    query_key.map(str::to_string)
+    query_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 pub fn is_loopback(peer: SocketAddr) -> bool {
@@ -68,6 +84,13 @@ fn is_ipv4_mapped_loopback(ip: IpAddr) -> bool {
             .unwrap_or(false),
         _ => false,
     }
+}
+
+fn strip_ipv6_brackets(value: &str) -> &str {
+    value
+        .strip_prefix("[")
+        .and_then(|value| value.strip_suffix("]"))
+        .unwrap_or(value)
 }
 
 pub fn is_direct_loopback_request(peer: SocketAddr, headers: &HeaderMap) -> bool {
@@ -91,36 +114,116 @@ pub fn is_direct_loopback_request(peer: SocketAddr, headers: &HeaderMap) -> bool
     let Some(host) = origin.host_str() else {
         return false;
     };
+    let host = strip_ipv6_brackets(host);
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
     host.parse::<IpAddr>().map(is_loopback_ip).unwrap_or(false)
 }
 
-fn jwt_secret(state: &AppState) -> Result<Vec<u8>, AppError> {
-    if let Ok(v) = std::env::var("JWT_SECRET") {
-        return Ok(v.into_bytes());
-    }
-    let path = state.config.data_dir.join("jwt-secret");
-    if let Ok(s) = fs::read_to_string(&path) {
-        let s = s.trim();
-        if !s.is_empty() {
-            return Ok(s.as_bytes().to_vec());
+pub fn rate_limit_ip(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
+    let trust_proxy = std::env::var("TRUST_PROXY").ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    if trust_proxy && is_loopback(peer) {
+        for name in ["x-forwarded-for", "x-real-ip"] {
+            let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) else {
+                continue;
+            };
+            let candidate = value.split(',').next().map(str::trim).unwrap_or("");
+            if let Some(ip) = parse_ip_candidate(candidate) {
+                return ip;
+            }
         }
     }
-    fs::create_dir_all(&state.config.data_dir).map_err(|e| AppError::Internal(e.into()))?;
+    peer.ip()
+}
+
+fn parse_ip_candidate(value: &str) -> Option<IpAddr> {
+    value
+        .parse::<IpAddr>()
+        .ok()
+        .or_else(|| value.parse::<SocketAddr>().ok().map(|address| address.ip()))
+        .or_else(|| strip_ipv6_brackets(value).parse::<IpAddr>().ok())
+}
+
+fn jwt_secret(state: &AppState) -> Result<Vec<u8>, AppError> {
+    match std::env::var("JWT_SECRET") {
+        Ok(value) if !value.trim().is_empty() => return Ok(value.trim().as_bytes().to_vec()),
+        Ok(_) => {
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "JWT_SECRET must not be empty"
+            )))
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => {
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "JWT_SECRET is not valid Unicode: {error}"
+            )))
+        }
+    }
+
+    let path = state.config.data_dir.join("jwt-secret");
+    if let Some(secret) = read_persisted_secret(&path)? {
+        return Ok(secret);
+    }
+
+    fs::create_dir_all(&state.config.data_dir).map_err(|error| AppError::Internal(error.into()))?;
     let mut bytes = [0u8; 32];
     use rand::RngCore;
     rand::rng().fill_bytes(&mut bytes);
-    let generated = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    fs::write(&path, &generated).map_err(|e| AppError::Internal(e.into()))?;
+    let generated = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            file.write_all(generated.as_bytes())
+                .and_then(|_| file.sync_all())
+                .map_err(|error| AppError::Internal(error.into()))?;
+            Ok(generated.into_bytes())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => read_persisted_secret(&path)?
+            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("jwt-secret was created empty"))),
+        Err(error) => Err(AppError::Internal(error.into())),
+    }
+}
+
+fn read_persisted_secret(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
+    let value = match fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(AppError::Internal(error.into())),
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "persisted jwt-secret is empty"
+        )));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-            .map_err(|e| AppError::Internal(e.into()))?;
+        let permissions = fs::metadata(path)
+            .map_err(|error| AppError::Internal(error.into()))?
+            .permissions();
+        if permissions.mode() & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .map_err(|error| AppError::Internal(error.into()))?;
+        }
     }
-    Ok(generated.into_bytes())
+    Ok(Some(value.as_bytes().to_vec()))
 }
 
 pub fn create_session_token(
@@ -134,48 +237,75 @@ pub fn create_session_token(
     extra.insert("authenticated".into(), Value::Bool(true));
     extra.insert("iat".into(), Value::from(now));
     extra.insert("exp".into(), Value::from(now + 86400));
-    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256"}"#);
+    let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"alg":"HS256","typ":"JWT"}))?);
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&Value::Object(extra))?);
     let input = format!("{header}.{payload}");
     let mut mac = HmacSha256::new_from_slice(&jwt_secret(state)?)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
+        .map_err(|error| AppError::Internal(anyhow::anyhow!(error.to_string())))?;
     mac.update(input.as_bytes());
-    let sig = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-    Ok(format!("{input}.{sig}"))
+    let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    Ok(format!("{input}.{signature}"))
+}
+
+fn valid_session_header(encoded: &str) -> bool {
+    let Ok(decoded) = URL_SAFE_NO_PAD.decode(encoded) else {
+        return false;
+    };
+    let Ok(header) = serde_json::from_slice::<Value>(&decoded) else {
+        return false;
+    };
+    header.get("alg").and_then(Value::as_str) == Some("HS256")
+        && header
+            .get("typ")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value == "JWT")
+        && header.get("crit").is_none()
 }
 
 pub fn verify_session_token(state: &AppState, token: &str) -> bool {
-    let mut p = token.split('.');
-    let (Some(h), Some(b), Some(s), None) = (p.next(), p.next(), p.next(), p.next()) else {
+    let mut parts = token.split('.');
+    let (Some(header), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return false;
     };
-    let input = format!("{h}.{b}");
-    let Ok(sig) = URL_SAFE_NO_PAD.decode(s) else {
+    if !valid_session_header(header) {
+        return false;
+    }
+    let input = format!("{header}.{payload}");
+    let Ok(signature) = URL_SAFE_NO_PAD.decode(signature) else {
         return false;
     };
-    let Ok(mut mac) = HmacSha256::new_from_slice(&jwt_secret(state).unwrap_or_default()) else {
+    let Ok(secret) = jwt_secret(state) else {
+        return false;
+    };
+    let Ok(mut mac) = HmacSha256::new_from_slice(&secret) else {
         return false;
     };
     mac.update(input.as_bytes());
     let expected = mac.finalize().into_bytes();
-    if expected.as_slice().ct_eq(sig.as_slice()).unwrap_u8() != 1 {
+    if expected.as_slice().ct_eq(signature.as_slice()).unwrap_u8() != 1 {
         return false;
     }
-    let Ok(payload) = URL_SAFE_NO_PAD.decode(b) else {
+    let Ok(payload) = URL_SAFE_NO_PAD.decode(payload) else {
         return false;
     };
-    let Ok(v) = serde_json::from_slice::<Value>(&payload) else {
+    let Ok(value) = serde_json::from_slice::<Value>(&payload) else {
         return false;
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    v.get("authenticated").and_then(Value::as_bool) == Some(true)
-        && v.get("exp")
+    value.get("authenticated").and_then(Value::as_bool) == Some(true)
+        && value
+            .get("iat")
             .and_then(Value::as_u64)
-            .map(|e| e > now)
-            .unwrap_or(false)
+            .is_some_and(|issued| issued <= now.saturating_add(300))
+        && value
+            .get("exp")
+            .and_then(Value::as_u64)
+            .is_some_and(|expires| expires > now)
 }
 
 pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -185,14 +315,10 @@ pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .ok()?
         .split(';')
         .find_map(|part| {
-            let mut p = part.trim().splitn(2, '=');
-            let k = p.next()?;
-            let v = p.next()?;
-            if k == name {
-                Some(v.to_string())
-            } else {
-                None
-            }
+            let mut parts = part.trim().splitn(2, '=');
+            let key = parts.next()?;
+            let value = parts.next()?;
+            (key == name).then(|| value.to_string())
         })
 }
 
@@ -265,11 +391,17 @@ pub fn require_llm(
     peer: SocketAddr,
     query_key: Option<&str>,
 ) -> Result<(), AppError> {
-    if is_direct_loopback_request(peer, headers) || has_valid_cli_token(state, headers) {
+    if has_valid_cli_token(state, headers) {
         return Ok(());
     }
     let settings = state.db.settings()?;
-    if settings.get("requireApiKey").and_then(Value::as_bool) == Some(false) {
+    let direct_local = is_direct_loopback_request(peer, headers);
+    let require_key = !direct_local
+        || settings
+            .get("requireApiKey")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+    if !require_key {
         return Ok(());
     }
     let Some(key) = extract_api_key(headers, query_key) else {
@@ -287,18 +419,30 @@ pub fn verify_password(state: &AppState, password: &str) -> Result<bool, AppErro
         return Ok(false);
     }
     let settings = state.db.settings()?;
-    if let Some(hash) = settings.get("password").and_then(Value::as_str) {
+    if let Some(hash) = settings
+        .get("password")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty())
+    {
         return Ok(bcrypt::verify(password, hash).unwrap_or(false));
     }
-    Ok(password == std::env::var("INITIAL_PASSWORD").unwrap_or_else(|_| "123456".into()))
+    let initial = std::env::var("INITIAL_PASSWORD")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "123456".to_string());
+    Ok(password == initial)
 }
 
 pub fn secure_cookie(headers: &HeaderMap) -> bool {
-    std::env::var("AUTH_COOKIE_SECURE").ok().as_deref() == Some("true")
+    std::env::var("AUTH_COOKIE_SECURE")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
         || headers
             .get("x-forwarded-proto")
-            .and_then(|v| v.to_str().ok())
-            == Some("https")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"))
 }
 
 pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
@@ -310,7 +454,19 @@ pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
     HeaderValue::from_str(&format!(
         "auth_token={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400{secure}"
     ))
-    .unwrap()
+    .expect("generated session cookie contains only valid header characters")
+}
+
+pub fn clear_session_cookie_header(headers: &HeaderMap) -> HeaderValue {
+    let secure = if secure_cookie(headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    HeaderValue::from_str(&format!(
+        "auth_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"
+    ))
+    .expect("generated clear-session cookie contains only valid header characters")
 }
 
 #[cfg(test)]
@@ -328,6 +484,27 @@ mod tests {
         assert_eq!(token, derive_cli_token("machine-123", "secret-456"));
         assert_ne!(token, derive_cli_token("machine-124", "secret-456"));
         assert_ne!(token, derive_cli_token("machine-123", "secret-457"));
+    }
+
+    #[test]
+    fn api_key_parser_accepts_case_insensitive_bearer_and_trims_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("bearer test-token"),
+        );
+        assert_eq!(
+            extract_api_key(&headers, None).as_deref(),
+            Some("test-token")
+        );
+
+        headers.remove(header::AUTHORIZATION);
+        headers.insert("x-api-key", HeaderValue::from_static("  key-123  "));
+        assert_eq!(extract_api_key(&headers, None).as_deref(), Some("key-123"));
+        assert_eq!(
+            extract_api_key(&HeaderMap::new(), Some("  query-key ")).as_deref(),
+            Some("query-key")
+        );
     }
 
     #[test]
@@ -352,5 +529,22 @@ mod tests {
             HeaderValue::from_static("https://router.example.com"),
         );
         assert!(!is_direct_loopback_request(peer("127.0.0.1:1234"), &origin));
+
+        let mut ipv6_origin = HeaderMap::new();
+        ipv6_origin.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://[::1]:20128"),
+        );
+        assert!(is_direct_loopback_request(peer("[::1]:1234"), &ipv6_origin));
+    }
+
+    #[test]
+    fn session_header_requires_hs256_jwt() {
+        let valid = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+        let wrong_algorithm = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let critical = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","crit":["exp"]}"#);
+        assert!(valid_session_header(&valid));
+        assert!(!valid_session_header(&wrong_algorithm));
+        assert!(!valid_session_header(&critical));
     }
 }

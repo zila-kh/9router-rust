@@ -7,7 +7,7 @@ use axum::{
 use bytes::Bytes;
 use futures_util::StreamExt;
 
-use crate::{error::AppError, state::AppState};
+use crate::{auth, error::AppError, state::AppState};
 
 const INTERNAL_SECRET_HEADER: &str = "x-9router-ui-secret";
 
@@ -45,13 +45,25 @@ pub async fn proxy_buffered(
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+    let forwarded_proto = if auth::is_loopback(peer)
+        && headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+    {
+        "https"
+    } else {
+        "http"
+    };
+
     let mut outbound_headers = reqwest::header::HeaderMap::new();
     for (name, value) in headers {
         let lower = name.as_str().to_ascii_lowercase();
         if is_hop(&lower)
+            || is_forwarding_header(&lower)
+            || is_internal_header(&lower)
             || lower == "host"
             || lower == "content-length"
-            || lower == INTERNAL_SECRET_HEADER
         {
             continue;
         }
@@ -71,15 +83,12 @@ pub async fn proxy_buffered(
             );
         }
     }
-    if !outbound_headers.contains_key(reqwest::header::HeaderName::from_static(
-        "x-forwarded-proto",
-    )) {
-        outbound_headers.insert(
-            reqwest::header::HeaderName::from_static("x-forwarded-proto"),
-            reqwest::header::HeaderValue::from_static("http"),
-        );
-    }
-    if let Ok(value) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
+    outbound_headers.insert(
+        reqwest::header::HeaderName::from_static("x-forwarded-proto"),
+        reqwest::header::HeaderValue::from_static(forwarded_proto),
+    );
+    let client_ip = auth::rate_limit_ip(peer, headers);
+    if let Ok(value) = reqwest::header::HeaderValue::from_str(&client_ip.to_string()) {
         outbound_headers.insert(
             reqwest::header::HeaderName::from_static("x-9r-real-ip"),
             value.clone(),
@@ -97,7 +106,7 @@ pub async fn proxy_buffered(
     );
     outbound_headers.insert(
         reqwest::header::HeaderName::from_static("x-9r-rust-compat"),
-        reqwest::header::HeaderValue::from_static("1.0.1"),
+        reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
 
     let response = state
@@ -133,7 +142,11 @@ pub async fn proxy_buffered(
 fn copy_headers(source: &reqwest::header::HeaderMap, destination: &mut HeaderMap) {
     for (name, value) in source {
         let lower = name.as_str().to_ascii_lowercase();
-        if is_hop(&lower) || lower == "content-length" || lower == INTERNAL_SECRET_HEADER {
+        if is_hop(&lower)
+            || is_forwarding_header(&lower)
+            || is_internal_header(&lower)
+            || lower == "content-length"
+        {
             continue;
         }
         if let (Ok(name), Ok(value)) = (
@@ -143,6 +156,34 @@ fn copy_headers(source: &reqwest::header::HeaderMap, destination: &mut HeaderMap
             destination.append(name, value);
         }
     }
+}
+
+fn is_internal_header(name: &str) -> bool {
+    matches!(
+        name,
+        INTERNAL_SECRET_HEADER
+            | "x-9router-runtime"
+            | "x-9r-rust-compat"
+            | "x-9r-ui-proxy"
+            | "x-9r-real-ip"
+            | "x-9r-peer-token"
+            | "x-9r-via-proxy"
+    )
+}
+
+fn is_forwarding_header(name: &str) -> bool {
+    matches!(
+        name,
+        "forwarded"
+            | "x-forwarded-for"
+            | "x-forwarded-host"
+            | "x-forwarded-proto"
+            | "x-real-ip"
+            | "cf-connecting-ip"
+            | "true-client-ip"
+            | "x-client-ip"
+            | "x-cluster-client-ip"
+    )
 }
 
 fn is_hop(name: &str) -> bool {
@@ -158,4 +199,34 @@ fn is_hop(name: &str) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_forwarding_header, is_internal_header};
+
+    #[test]
+    fn untrusted_forwarding_and_internal_headers_are_classified() {
+        for header in [
+            "forwarded",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-real-ip",
+            "cf-connecting-ip",
+        ] {
+            assert!(is_forwarding_header(header), "{header}");
+        }
+        for header in [
+            "x-9router-ui-secret",
+            "x-9router-runtime",
+            "x-9r-rust-compat",
+            "x-9r-ui-proxy",
+            "x-9r-real-ip",
+            "x-9r-peer-token",
+            "x-9r-via-proxy",
+        ] {
+            assert!(is_internal_header(header), "{header}");
+        }
+    }
 }
