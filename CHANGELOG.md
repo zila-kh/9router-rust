@@ -6,11 +6,14 @@
 - Restored upstream `src/app/api` handlers as an internal compatibility layer instead of deleting them from the vendored frontend.
 - Added `NINEROUTER_COMPAT_API=1`: Rust remains the public listener, enforces dashboard authentication, and uses the pinned upstream handlers for exact management-API contracts while the native port is completed.
 - Kept login, logout, session status, password reset, health, and native parity reporting Rust-owned in compatibility mode.
-- Mirrored upstream public, protected, always-protected, and local-only route classes at the Rust boundary, including direct-loopback enforcement for host-control operations.
+- Mirrored upstream public, protected, always-protected, and local-only route classes at the Rust boundary.
+- Ported upstream `x-9r-cli-token` validation from the shared `machine-id` and `auth/cli-secret` files for native and compatibility management APIs.
+- Added direct-loopback, browser-origin, and forwarded-peer checks for host-control operations so a reverse proxy hop cannot be mistaken for a local request.
 - Added a shared `NINEROUTER_UI_SECRET` guard; direct requests to internal Next backend paths remain blocked.
 - Added `x-9router-runtime: upstream-compat` for delegated responses.
 - Kept `/v1`, `/v1beta`, `/responses`, and `/codex` Rust-owned.
 - Added upstream-compatible `/api/health` JSON, CORS headers, and `OPTIONS` behavior.
+- Updated strict `/api/init` and `/api/version` metadata to report the pinned upstream `0.5.75` snapshot.
 - Added a dedicated no-redirect proxy client so OIDC, SAML, login, and other browser redirects are returned intact with the original public host and protocol.
 - Restored upstream server bootstrap only in compatibility mode, including outbound proxy initialization, OAuth refresh scheduling, model-catalog synchronization, tunnel services, MCP bridges, and related runtime integrations; strict mode remains inert.
 - Unified `NINEROUTER_DATA_DIR` and upstream `DATA_DIR` so Rust and Next read the same database and runtime files, and aligned the Windows default data directory with upstream.
