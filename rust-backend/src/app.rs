@@ -1,6 +1,6 @@
 use crate::{
-    auth, compat_media, compat_proxy, error::AppError, gateway, management, media,
-    state::AppState, ui_proxy,
+    auth, compat_media, compat_proxy, error::AppError, gateway, management, media, state::AppState,
+    ui_proxy,
 };
 use axum::{
     body::{to_bytes, Body},
