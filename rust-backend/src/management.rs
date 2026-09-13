@@ -684,14 +684,16 @@ fn settings_update(state: &AppState, mut body: Value) -> Result<Response<Body>, 
                     json!({"error":"Invalid current password"}),
                 );
             }
-        } else if current_password
+        } else if let Some(current_password) = current_password
             .as_deref()
-            .is_some_and(|value| !value.is_empty() && value != "123456")
+            .filter(|value| !value.is_empty())
         {
-            return json_response_no_store(
-                StatusCode::UNAUTHORIZED,
-                json!({"error":"Invalid current password"}),
-            );
+            if !auth::verify_password(state, current_password)? {
+                return json_response_no_store(
+                    StatusCode::UNAUTHORIZED,
+                    json!({"error":"Invalid current password"}),
+                );
+            }
         }
         object.insert(
             "password".into(),
