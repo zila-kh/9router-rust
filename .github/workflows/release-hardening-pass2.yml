@@ -24,8 +24,10 @@ jobs:
           components: rustfmt
       - name: Format Rust sources
         run: cargo fmt --manifest-path rust-backend/Cargo.toml --all
-      - name: Remove one-shot helpers
-        run: rm -f scripts/release-hardening-pass2.py .github/workflows/release-hardening-pass2.yml
+      - name: Split protected workflow edit and remove helpers
+        run: |
+          git checkout -- .github/workflows/full-stack-ci.yml
+          rm -f scripts/release-hardening-pass2.py .github/workflows/release-hardening-pass2.yml
       - name: Commit generated changes
         run: |
           set -euo pipefail
