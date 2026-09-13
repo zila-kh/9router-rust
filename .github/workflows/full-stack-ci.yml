@@ -47,7 +47,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Materialize pinned frontend
-        run: ./scripts/materialize-frontend.sh frontend
+        run: bash scripts/materialize-frontend.sh frontend
       - name: Install frontend dependencies
         working-directory: frontend
         run: |
@@ -71,7 +71,7 @@ jobs:
         with:
           node-version: 22
       - name: Materialize pinned frontend
-        run: ./scripts/materialize-frontend.sh frontend
+        run: bash scripts/materialize-frontend.sh frontend
       - name: Install UI dependencies
         working-directory: frontend
         run: |
@@ -101,16 +101,16 @@ jobs:
           mkdir -p "$NINEROUTER_DATA_DIR"
           (cd frontend && npm run start:ui >"${RUNNER_TEMP}/ui.log" 2>&1 & echo $! >"${RUNNER_TEMP}/ui.pid")
           ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 & echo $! >"${RUNNER_TEMP}/rust.pid"
-          ./scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
+          bash scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
       - name: Smoke test Rust and UI
         env:
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
           NINEROUTER_TEST_PASSWORD: compat-ci-password
-        run: ./scripts/full-stack-smoke.sh http://127.0.0.1:20128
+        run: bash scripts/full-stack-smoke.sh http://127.0.0.1:20128
       - name: Native parity report
         env:
           NINEROUTER_ALLOW_PARITY_GAPS: "1"
-        run: ./scripts/release-gate.sh .
+        run: bash scripts/release-gate.sh .
       - name: Dump logs on failure
         if: failure()
         run: |
