@@ -106,8 +106,7 @@ async fn handle_management(
         ));
     }
 
-    if is_always_protected_path(&path)
-        && !auth::has_valid_dashboard_session(&state, &parts.headers)
+    if is_always_protected_path(&path) && !auth::has_valid_dashboard_session(&state, &parts.headers)
     {
         return Err(AppError::Unauthorized);
     }
