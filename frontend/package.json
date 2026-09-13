@@ -16,7 +16,7 @@
     "cli:pack": "npm --prefix cli run pack:cli",
     "cli:publish": "npm --prefix cli run publish:cli",
     "dev:ui": "next dev --webpack --hostname 127.0.0.1 --port 20129",
-    "start:ui": "next start --hostname 127.0.0.1 --port 20129"
+    "start:ui": "node .next/standalone/custom-server.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

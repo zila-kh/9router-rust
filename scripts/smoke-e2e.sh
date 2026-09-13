@@ -86,7 +86,10 @@ for _ in {1..80}; do
 done
 curl -fsS http://127.0.0.1:18080/ >/dev/null
 
-NINEROUTER_UI_ONLY=1 npm --prefix frontend run start:ui >"$UI_LOG" 2>&1 &
+(
+  cd frontend
+  exec env NINEROUTER_UI_ONLY=1 node .next/standalone/custom-server.js
+) >"$UI_LOG" 2>&1 &
 for _ in {1..120}; do
   curl -fsS http://127.0.0.1:20129/login >/dev/null 2>&1 && break
   sleep 0.25

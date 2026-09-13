@@ -937,3 +937,33 @@ pub fn merge_settings_defaults(mut raw: Value) -> Value {
     }
     Value::Object(d)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{mask_key, Db};
+    use serde_json::json;
+
+    #[test]
+    fn masks_unicode_api_keys_without_byte_slicing() {
+        assert_eq!(
+            mask_key(Some("密钥密钥密钥密钥密钥")),
+            Some("密钥密钥密钥密钥***".into())
+        );
+        assert_eq!(mask_key(Some("é")), Some("é***".into()));
+    }
+
+    #[test]
+    fn combo_upsert_returns_the_persisted_identifier() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let db = Db::open(temp.path().join("data.sqlite")).expect("open test database");
+        let first = db
+            .upsert_combo(json!({"name":"stable","models":["one"]}))
+            .expect("insert combo");
+        let second = db
+            .upsert_combo(json!({"name":"stable","models":["two"]}))
+            .expect("update combo");
+
+        assert_eq!(first["id"], second["id"]);
+        assert_eq!(second["models"], json!(["two"]));
+    }
+}

@@ -56,11 +56,16 @@ impl Config {
         if upstream_timeout_secs == 0 {
             bail!("NINEROUTER_UPSTREAM_TIMEOUT_SECS must be greater than zero");
         }
-        let ui_only_header_secret = env::var("NINEROUTER_UI_SECRET")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let compat_api_enabled = env_flag("NINEROUTER_COMPAT_API", false)?;
+        let ui_only_header_secret = match env::var("NINEROUTER_UI_SECRET") {
+            Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+            Ok(_) => bail!("NINEROUTER_UI_SECRET must not be empty"),
+            Err(env::VarError::NotPresent) if compat_api_enabled => {
+                bail!("NINEROUTER_UI_SECRET is required when NINEROUTER_COMPAT_API is enabled")
+            }
+            Err(env::VarError::NotPresent) => uuid::Uuid::new_v4().to_string(),
+            Err(error) => return Err(error).context("NINEROUTER_UI_SECRET is not valid Unicode"),
+        };
         let legacy_backend_origin = if env_flag("NINEROUTER_DISABLE_LEGACY_BRIDGE", false)? {
             None
         } else {
@@ -71,7 +76,6 @@ impl Config {
                 .map(|value| validate_loopback_origin("NINEROUTER_LEGACY_BACKEND_ORIGIN", value))
                 .transpose()?
         };
-        let compat_api_enabled = env_flag("NINEROUTER_COMPAT_API", false)?;
         Ok(Self {
             listen: SocketAddr::new(host, port),
             ui_origin,

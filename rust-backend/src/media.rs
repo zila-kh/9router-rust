@@ -147,7 +147,7 @@ async fn embedding_once(
         let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::from_static("x-goog-api-key"),
-            HeaderValue::from_str(&key).map_err(|error| {
+            HeaderValue::from_str(key).map_err(|error| {
                 AppError::BadRequest(format!("invalid Gemini API key: {error}"))
             })?,
         );

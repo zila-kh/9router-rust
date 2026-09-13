@@ -399,8 +399,29 @@ pub fn endpoint(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_env_placeholders_with;
+    use super::{resolve_env_placeholders_with, resolve_model};
+    use crate::{config::Config, db::Db, error::AppError, state::AppState};
     use serde_json::json;
+
+    fn test_state() -> (tempfile::TempDir, AppState) {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&data_dir).expect("create data directory");
+        let db_path = data_dir.join("data.sqlite");
+        let db = Db::open(&db_path).expect("open test database");
+        let config = Config {
+            listen: "127.0.0.1:0".parse().expect("test socket address"),
+            ui_origin: "http://127.0.0.1:20129".into(),
+            data_dir,
+            db_path,
+            upstream_timeout_secs: 5,
+            ui_only_header_secret: "test-secret".into(),
+            legacy_backend_origin: None,
+            compat_api_enabled: false,
+        };
+        let state = AppState::new(config, db).expect("test application state");
+        (temp, state)
+    }
 
     #[test]
     fn resolves_nested_environment_placeholders() {
@@ -425,5 +446,46 @@ mod tests {
         let mut value = json!({"token": "env:MISSING_TOKEN"});
         resolve_env_placeholders_with(&mut value, &|_| None);
         assert_eq!(value["token"], "");
+    }
+
+    #[test]
+    fn model_alias_cycles_return_an_error_without_recursing() {
+        let (_temp, state) = test_state();
+        state
+            .db
+            .kv_set("modelAliases", "alias-a", &json!("alias-b"))
+            .expect("store first alias");
+        state
+            .db
+            .kv_set("modelAliases", "alias-b", &json!("alias-a"))
+            .expect("store second alias");
+
+        match resolve_model(&state, "alias-a") {
+            Err(AppError::BadRequest(message)) => assert!(message.contains("cyclic")),
+            other => panic!("expected cyclic alias error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn model_aliases_support_current_and_legacy_orientation() {
+        for (key, value, requested) in [
+            ("friendly", "openai/model-x", "friendly"),
+            ("openai/model-x", "legacy-friendly", "legacy-friendly"),
+        ] {
+            let (_temp, state) = test_state();
+            state
+                .db
+                .create_connection(json!({"provider":"openai","apiKey":"test-key"}))
+                .expect("create provider connection");
+            state
+                .db
+                .kv_set("modelAliases", key, &json!(value))
+                .expect("store model alias");
+
+            let resolved = resolve_model(&state, requested).expect("resolve model alias");
+            assert_eq!(resolved.requested, requested);
+            assert_eq!(resolved.provider, "openai");
+            assert_eq!(resolved.model, "model-x");
+        }
     }
 }

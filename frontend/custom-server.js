@@ -4,6 +4,17 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 
+if (process.env.NINEROUTER_UI_ONLY === "1") {
+  const uiPort = process.env.NINEROUTER_UI_PORT || "20129";
+  if (!/^\d+$/.test(uiPort) || Number(uiPort) < 1 || Number(uiPort) > 65535) {
+    throw new Error(`Invalid NINEROUTER_UI_PORT: ${uiPort}`);
+  }
+  // The compatibility listener is private by design. Never honor a public bind
+  // address inherited from the Rust process or the user's shell.
+  process.env.HOSTNAME = "127.0.0.1";
+  process.env.PORT = uiPort;
+}
+
 const origCreate = http.createServer.bind(http);
 
 // Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.
