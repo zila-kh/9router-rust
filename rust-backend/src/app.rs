@@ -220,3 +220,64 @@ fn add_health_cors(headers: &mut HeaderMap) {
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(value: &str) -> SocketAddr {
+        value.parse().expect("valid test socket address")
+    }
+
+    #[test]
+    fn compatibility_public_paths_match_upstream_allowlist() {
+        assert!(public_compat_path("/api/init"));
+        assert!(public_compat_path("/api/locale"));
+        assert!(public_compat_path("/api/auth/oidc/callback"));
+        assert!(public_compat_path("/api/auth/saml/metadata"));
+        assert!(!public_compat_path("/api/tags"));
+        assert!(!public_compat_path("/api/auth/oidc-extra"));
+    }
+
+    #[test]
+    fn sensitive_route_classes_are_preserved() {
+        assert!(is_always_protected_path("/api/settings/database"));
+        assert!(is_always_protected_path("/api/version/update/check"));
+        assert!(is_local_only_path("/api/headroom/start"));
+        assert!(is_local_only_path("/api/mcp/tools"));
+        assert!(!is_local_only_path("/api/providers"));
+    }
+
+    #[test]
+    fn local_only_gate_rejects_remote_or_forwarded_requests() {
+        let headers = HeaderMap::new();
+        assert!(is_safe_local_request(peer("127.0.0.1:1234"), &headers));
+        assert!(!is_safe_local_request(peer("192.0.2.20:1234"), &headers));
+
+        let mut forwarded = HeaderMap::new();
+        forwarded.insert("x-9r-via-proxy", HeaderValue::from_static("1"));
+        assert!(!is_safe_local_request(
+            peer("127.0.0.1:1234"),
+            &forwarded
+        ));
+    }
+
+    #[test]
+    fn local_only_gate_validates_browser_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:20128"),
+        );
+        assert!(is_safe_local_request(peer("127.0.0.1:1234"), &headers));
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://router.example.com"),
+        );
+        assert!(!is_safe_local_request(
+            peer("127.0.0.1:1234"),
+            &headers
+        ));
+    }
+}
