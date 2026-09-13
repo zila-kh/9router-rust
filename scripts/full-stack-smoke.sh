@@ -58,6 +58,37 @@ request auth_status --cookie "$TMP/cookies" "$BASE/api/auth/status"
 grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*true' "$TMP/auth_status.body"
 grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/auth_status.headers"
 
+# An authenticated dashboard session reached through a reverse-proxy hop must not
+# gain access to host-local credential import or callback-server controls.
+remote_xiaomi_status="$(curl --silent --show-error \
+  --cookie "$TMP/cookies" \
+  --header 'x-forwarded-for: 198.51.100.23' \
+  --dump-header "$TMP/remote-xiaomi.headers" \
+  --output "$TMP/remote-xiaomi.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/oauth/xiaomi-mimo/auto-import")"
+[[ "$remote_xiaomi_status" == 403 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/remote-xiaomi.headers"
+
+remote_proxy_status="$(curl --silent --show-error \
+  --cookie "$TMP/cookies" \
+  --header 'x-forwarded-for: 198.51.100.23' \
+  --dump-header "$TMP/remote-proxy.headers" \
+  --output "$TMP/remote-proxy.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/oauth/codex/start-proxy?app_port=20128")"
+[[ "$remote_proxy_status" == 403 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/remote-proxy.headers"
+
+# Remote-safe, user-supplied token import instructions remain available to an
+# authenticated remote dashboard, proving the local-only matcher is not broad.
+request cursor_import_remote \
+  --cookie "$TMP/cookies" \
+  --header 'x-forwarded-for: 198.51.100.23' \
+  "$BASE/api/oauth/cursor/import"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/cursor_import_remote.headers"
+grep -Eq '"method"[[:space:]]*:[[:space:]]*"import_token"' "$TMP/cursor_import_remote.body"
+
 # SSO diagnostics must stay protected even though browser login/callback endpoints
 # are public. This guards against an overly broad /api/auth/{oidc,saml}/ prefix.
 for endpoint in oidc saml; do
