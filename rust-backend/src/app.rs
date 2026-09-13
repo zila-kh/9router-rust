@@ -37,10 +37,9 @@ async fn entry(
     match result {
         Ok(mut response) => {
             if is_backend && !response.headers().contains_key("x-9router-runtime") {
-                response.headers_mut().insert(
-                    "x-9router-runtime",
-                    HeaderValue::from_static("rust"),
-                );
+                response
+                    .headers_mut()
+                    .insert("x-9router-runtime", HeaderValue::from_static("rust"));
             }
             response
         }

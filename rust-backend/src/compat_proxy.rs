@@ -20,7 +20,9 @@ pub async fn proxy_buffered(
     body: Bytes,
 ) -> Result<Response<Body>, AppError> {
     if !state.config.compat_api_enabled {
-        return Err(AppError::NotFound("upstream compatibility API disabled".into()));
+        return Err(AppError::NotFound(
+            "upstream compatibility API disabled".into(),
+        ));
     }
 
     let secret = state.config.ui_only_header_secret.trim();
@@ -31,7 +33,10 @@ pub async fn proxy_buffered(
     }
 
     let base = state.config.ui_origin.trim_end_matches('/');
-    let path_and_query = uri.path_and_query().map(|value| value.as_str()).unwrap_or("/");
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/");
     let url = format!("{base}{path_and_query}");
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|error| AppError::Internal(error.into()))?;
