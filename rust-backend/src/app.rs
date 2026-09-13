@@ -171,11 +171,17 @@ fn native_in_compat_mode(method: &Method, path: &str) -> bool {
 }
 
 fn public_compat_path(path: &str) -> bool {
-    matches!(path, "/api/init" | "/api/version" | "/api/locale")
-        || path == "/api/auth/oidc"
-        || path.starts_with("/api/auth/oidc/")
-        || path == "/api/auth/saml"
-        || path.starts_with("/api/auth/saml/")
+    matches!(
+        path,
+        "/api/init"
+            | "/api/version"
+            | "/api/locale"
+            | "/api/auth/oidc/start"
+            | "/api/auth/oidc/callback"
+            | "/api/auth/saml/start"
+            | "/api/auth/saml/acs"
+            | "/api/auth/saml/metadata"
+    )
 }
 
 fn is_always_protected_path(path: &str) -> bool {
@@ -289,8 +295,13 @@ mod tests {
     fn compatibility_public_paths_match_upstream_allowlist() {
         assert!(public_compat_path("/api/init"));
         assert!(public_compat_path("/api/locale"));
+        assert!(public_compat_path("/api/auth/oidc/start"));
         assert!(public_compat_path("/api/auth/oidc/callback"));
+        assert!(public_compat_path("/api/auth/saml/start"));
+        assert!(public_compat_path("/api/auth/saml/acs"));
         assert!(public_compat_path("/api/auth/saml/metadata"));
+        assert!(!public_compat_path("/api/auth/oidc/test"));
+        assert!(!public_compat_path("/api/auth/saml/test"));
         assert!(!public_compat_path("/api/tags"));
         assert!(!public_compat_path("/api/auth/oidc-extra"));
     }
