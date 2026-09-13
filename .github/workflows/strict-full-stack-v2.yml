@@ -82,7 +82,7 @@ jobs:
           NINEROUTER_UI_ONLY: "1"
         run: |
           mkdir -p "$NINEROUTER_DATA_DIR"
-          nohup ./rust-backend/target/release/nine-router-rs >"${RUNNER_TEMP}/rust.log" 2>&1 &
+          nohup ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/rust.pid"
           bash scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
 
