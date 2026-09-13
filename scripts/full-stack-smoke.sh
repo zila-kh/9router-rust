@@ -169,17 +169,27 @@ case "$video_status" in
 esac
 ! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
 
-# The exact /v1/web path is handled only by the compatibility router. Its CORS
-# preflight remains unauthenticated and proves the route is wired correctly.
+# A standards-compliant CORS preflight may be answered by Axum's outer CorsLayer
+# with HTTP 200 or by the compatibility handler itself with HTTP 204. Validate the
+# actual browser contract rather than coupling the smoke test to one middleware.
 web_preflight_status="$(curl --silent --show-error \
   --request OPTIONS \
+  --header 'Origin: https://client.example' \
+  --header 'Access-Control-Request-Method: POST' \
   --dump-header "$TMP/web-preflight.headers" \
   --output "$TMP/web-preflight.body" \
   --write-out '%{http_code}' \
   "$BASE/v1/web")"
-[[ "$web_preflight_status" == 204 ]]
-grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/web-preflight.headers"
+case "$web_preflight_status" in
+  200|204) ;;
+  *)
+    echo "Unexpected web preflight response (HTTP $web_preflight_status)" >&2
+    cat "$TMP/web-preflight.body" >&2
+    exit 1
+    ;;
+esac
 grep -qi '^access-control-allow-origin:[[:space:]]*\*' "$TMP/web-preflight.headers"
+grep -Eqi '^access-control-allow-methods:.*POST' "$TMP/web-preflight.headers"
 
 # The internal Next listener must reject the same API request without Rust's secret.
 if [[ -n "$UI_ORIGIN" ]]; then
