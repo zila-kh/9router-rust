@@ -6,6 +6,7 @@ command -v cargo >/dev/null || { echo 'error: cargo not found' >&2; exit 127; }
 command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
 command -v node >/dev/null || { echo 'error: node not found' >&2; exit 127; }
 python3 ./scripts/static-audit.py
+bash ./scripts/test-frontend-materialization.sh
 cargo fmt --manifest-path rust-backend/Cargo.toml --all -- --check
 cargo check --locked --all-targets --manifest-path rust-backend/Cargo.toml
 cargo test --locked --all-targets --manifest-path rust-backend/Cargo.toml
