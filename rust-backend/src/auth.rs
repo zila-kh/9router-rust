@@ -4,7 +4,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     net::{IpAddr, SocketAddr},
@@ -13,6 +13,9 @@ use std::{
 use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
+
+const CLI_TOKEN_HEADER: &str = "x-9r-cli-token";
+const CLI_TOKEN_SALT: &str = "9r-cli-auth";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionClaims {
@@ -152,6 +155,56 @@ pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         })
 }
 
+pub fn has_valid_cli_token(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(supplied) = headers
+        .get(CLI_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+
+    let Some(raw_machine_id) = read_nonempty(state.config.data_dir.join("machine-id")) else {
+        return false;
+    };
+    let Some(cli_secret) = read_nonempty(
+        state
+            .config
+            .data_dir
+            .join("auth")
+            .join("cli-secret"),
+    ) else {
+        return false;
+    };
+    let expected = derive_cli_token(&raw_machine_id, &cli_secret);
+    expected
+        .as_bytes()
+        .ct_eq(supplied.as_bytes())
+        .unwrap_u8()
+        == 1
+}
+
+fn read_nonempty(path: std::path::PathBuf) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn derive_cli_token(raw_machine_id: &str, cli_secret: &str) -> String {
+    let digest = Sha256::digest(format!(
+        "{}{}{}",
+        raw_machine_id.trim(),
+        CLI_TOKEN_SALT,
+        cli_secret.trim()
+    ));
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 pub fn has_valid_dashboard_session(state: &AppState, headers: &HeaderMap) -> bool {
     cookie(headers, "auth_token")
         .map(|token| verify_session_token(state, &token))
@@ -226,4 +279,18 @@ pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
         "auth_token={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400{secure}"
     ))
     .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_token_matches_upstream_shape() {
+        let token = derive_cli_token("machine-123", "secret-456");
+        assert_eq!(token.len(), 16);
+        assert_eq!(token, derive_cli_token("machine-123", "secret-456"));
+        assert_ne!(token, derive_cli_token("machine-124", "secret-456"));
+        assert_ne!(token, derive_cli_token("machine-123", "secret-457"));
+    }
 }
