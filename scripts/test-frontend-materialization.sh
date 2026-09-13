@@ -12,6 +12,7 @@ rm -rf "$TMP/frontend/node_modules" "$TMP/frontend/.next"
 printf '%s\n' '// intentionally stale custom server' > "$TMP/frontend/custom-server.js"
 printf '%s\n' '// intentionally stale dashboard guard' > "$TMP/frontend/src/dashboardGuard.js"
 printf '%s\n' '// intentionally stale login route' > "$TMP/frontend/src/app/api/auth/login/route.js"
+printf '%s\n' '// intentionally stale settings route' > "$TMP/frontend/src/app/api/settings/route.js"
 
 bash "$ROOT/scripts/materialize-frontend.sh" "$TMP/frontend"
 
@@ -20,6 +21,9 @@ cmp "$ROOT/scripts/frontend-overrides/src/dashboardGuard.js" "$TMP/frontend/src/
 cmp \
   "$ROOT/scripts/frontend-overrides/src/app/api/auth/login/route.js" \
   "$TMP/frontend/src/app/api/auth/login/route.js"
+cmp \
+  "$ROOT/scripts/frontend-overrides/src/app/api/settings/route.js" \
+  "$TMP/frontend/src/app/api/settings/route.js"
 
 node - "$TMP/frontend/package.json" <<'NODE'
 const fs = require("node:fs");
@@ -39,5 +43,6 @@ NODE
 grep -q 'x-9router-ui-secret' "$TMP/frontend/custom-server.js"
 grep -q 'PUBLIC_API_ROUTES' "$TMP/frontend/src/dashboardGuard.js"
 grep -q 'mustChangePassword' "$TMP/frontend/src/app/api/auth/login/route.js"
+grep -q 'INITIAL_PASSWORD' "$TMP/frontend/src/app/api/settings/route.js"
 
 printf 'Frontend materialization security overlays: OK\n'
