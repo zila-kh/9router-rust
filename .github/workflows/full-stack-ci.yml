@@ -101,7 +101,10 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
         run: |
           set -euo pipefail
-          mkdir -p "$NINEROUTER_DATA_DIR"
+          mkdir -p "$NINEROUTER_DATA_DIR/auth"
+          printf '%s\n' 'ci-machine-id' > "$NINEROUTER_DATA_DIR/machine-id"
+          printf '%s\n' 'ci-cli-secret' > "$NINEROUTER_DATA_DIR/auth/cli-secret"
+          chmod 600 "$NINEROUTER_DATA_DIR/machine-id" "$NINEROUTER_DATA_DIR/auth/cli-secret"
           (cd frontend && npm run start:ui >"${RUNNER_TEMP}/ui.log" 2>&1 & echo $! >"${RUNNER_TEMP}/ui.pid")
           ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 & echo $! >"${RUNNER_TEMP}/rust.pid"
           bash scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
@@ -109,7 +112,9 @@ jobs:
         env:
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
           NINEROUTER_TEST_PASSWORD: compat-ci-password
-        run: bash scripts/full-stack-smoke.sh http://127.0.0.1:20128
+        run: |
+          cli_token="$(node -e "const c=require('node:crypto'); process.stdout.write(c.createHash('sha256').update('ci-machine-id9r-cli-authci-cli-secret').digest('hex').slice(0,16))")"
+          NINEROUTER_TEST_CLI_TOKEN="$cli_token" bash scripts/full-stack-smoke.sh http://127.0.0.1:20128
       - name: Native parity report
         env:
           NINEROUTER_ALLOW_PARITY_GAPS: "1"
