@@ -3,6 +3,7 @@ name: Strict full-stack v2
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -69,23 +70,29 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
           NINEROUTER_COMPAT_API: "0"
+          NINEROUTER_UI_PORT: "20129"
+          NINEROUTER_UI_SECRET: strict-ci-internal-token
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
           DATA_DIR: ${{ runner.temp }}/9router-data
         run: |
+          set -euo pipefail
           mkdir -p "$DATA_DIR"
-          nohup npm run start:ui >"${RUNNER_TEMP}/ui.log" 2>&1 &
+          nohup node .next/standalone/custom-server.js >"${RUNNER_TEMP}/ui.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/ui.pid"
+          bash "$GITHUB_WORKSPACE/scripts/wait-http.sh" http://127.0.0.1:20129/login 90
 
       - name: Start strict Rust backend
         env:
           PORT: "20128"
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
+          NINEROUTER_UI_SECRET: strict-ci-internal-token
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
           DATA_DIR: ${{ runner.temp }}/9router-data
           NINEROUTER_DISABLE_LEGACY_BRIDGE: "1"
           NINEROUTER_COMPAT_API: "0"
           NINEROUTER_UI_ONLY: "1"
         run: |
+          set -euo pipefail
           mkdir -p "$NINEROUTER_DATA_DIR"
           nohup ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/rust.pid"
@@ -102,7 +109,7 @@ jobs:
       - name: Publish native parity audit
         env:
           NINEROUTER_ALLOW_PARITY_GAPS: "1"
-        run: bash scripts/release-gate.sh .
+        run: node scripts/audit-parity.mjs
 
       - name: Upload diagnostics
         if: always()
