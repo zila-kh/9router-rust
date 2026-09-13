@@ -4,6 +4,7 @@ set -euo pipefail
 BASE="${1:-http://127.0.0.1:20128}"
 UI_ORIGIN="${NINEROUTER_UI_ORIGIN:-}"
 PASSWORD="${NINEROUTER_TEST_PASSWORD:-123456}"
+CLI_TOKEN="${NINEROUTER_TEST_CLI_TOKEN:-}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -74,6 +75,14 @@ unauth_tags_status="$(curl --silent --show-error \
 request tags --cookie "$TMP/cookies" "$BASE/api/tags"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags.headers"
 grep -Eq '^[[:space:]]*\[' "$TMP/tags.body"
+
+# CLI clients use the same machine-id/secret-derived token as upstream and do not
+# need a dashboard cookie for protected management APIs.
+if [[ -n "$CLI_TOKEN" ]]; then
+  request tags_cli --header "x-9r-cli-token: $CLI_TOKEN" "$BASE/api/tags"
+  grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags_cli.headers"
+  grep -Eq '^[[:space:]]*\[' "$TMP/tags_cli.body"
+fi
 
 # The internal Next listener must reject the same API request without Rust's secret.
 if [[ -n "$UI_ORIGIN" ]]; then
