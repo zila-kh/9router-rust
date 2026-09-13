@@ -4,14 +4,41 @@ use crate::{
 use axum::{
     body::{to_bytes, Body},
     extract::{ConnectInfo, State},
-    http::{header, HeaderValue, Method, Request, Response, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, Request, Response, StatusCode},
     response::IntoResponse,
     Router,
 };
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 const MAX_API_BODY: usize = 128 * 1024 * 1024;
 const UPSTREAM_COMMIT: &str = "17c4cc76877bd1755030a8414f8d0083f48dcccf";
+
+const ALWAYS_PROTECTED_PREFIXES: &[&str] = &[
+    "/api/shutdown",
+    "/api/settings/database",
+    "/api/version/shutdown",
+    "/api/version/update",
+    "/api/oauth/cursor/auto-import",
+    "/api/oauth/kiro/auto-import",
+];
+
+const LOCAL_ONLY_PREFIXES: &[&str] = &[
+    "/api/cli-tools/cowork-settings",
+    "/api/cli-tools/antigravity-mitm",
+    "/api/mcp/",
+    "/api/tunnel/tailscale-install",
+    "/api/tunnel/tailscale-enable",
+    "/api/tunnel/tailscale-disable",
+    "/api/tunnel/tailscale-check",
+    "/api/tunnel/enable",
+    "/api/tunnel/disable",
+    "/api/oauth/cursor/auto-import",
+    "/api/oauth/kiro/auto-import",
+    "/api/auth/reset-password",
+    "/api/headroom/start",
+    "/api/headroom/stop",
+    "/api/headroom/proxy",
+];
 
 pub fn router(state: AppState) -> Router {
     Router::new().fallback(entry).with_state(state)
@@ -72,6 +99,19 @@ async fn handle_management(
     }
 
     let (parts, body) = request.into_parts();
+
+    if is_local_only_path(&path) && !is_safe_local_request(peer, &parts.headers) {
+        return Err(AppError::Forbidden(
+            "Local only: use the loopback listener".into(),
+        ));
+    }
+
+    if is_always_protected_path(&path)
+        && !auth::has_valid_dashboard_session(&state, &parts.headers)
+    {
+        return Err(AppError::Unauthorized);
+    }
+
     if !public_compat_path(&path) {
         auth::require_dashboard(&state, &parts.headers)?;
     }
@@ -99,14 +139,54 @@ fn native_in_compat_mode(method: &Method, path: &str) -> bool {
 }
 
 fn public_compat_path(path: &str) -> bool {
-    matches!(path, "/api/init" | "/api/version" | "/api/tags")
-        || path.starts_with("/api/auth/oidc")
-        || path.starts_with("/api/auth/saml")
+    matches!(path, "/api/init" | "/api/version" | "/api/locale")
+        || path == "/api/auth/oidc"
+        || path.starts_with("/api/auth/oidc/")
+        || path == "/api/auth/saml"
+        || path.starts_with("/api/auth/saml/")
+}
+
+fn is_always_protected_path(path: &str) -> bool {
+    ALWAYS_PROTECTED_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn is_local_only_path(path: &str) -> bool {
+    LOCAL_ONLY_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn is_safe_local_request(peer: SocketAddr, headers: &HeaderMap) -> bool {
+    if !auth::is_loopback(peer) || headers.contains_key("x-9r-via-proxy") {
+        return false;
+    }
+
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Ok(origin) = url::Url::parse(origin) else {
+        return false;
+    };
+    let Some(host) = origin.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>()
+        .map(auth::is_loopback_ip)
+        .unwrap_or(false)
 }
 
 fn health_response() -> Response<Body> {
     let body = format!(
-        "{{\"ok\":true,\"status\":\"ok\",\"runtime\":\"rust\",\"version\":\"1.0.1\",\"upstreamVersion\":\"0.5.75\",\"upstreamSnapshot\":\"{UPSTREAM_COMMIT}\"}}"
+        "{{\"ok\":true,\"status\":\"ok\",\"runtime\":\"rust\",\"version\":\"{}\",\"upstreamVersion\":\"0.5.75\",\"upstreamSnapshot\":\"{UPSTREAM_COMMIT}\"}}",
+        env!("CARGO_PKG_VERSION")
     );
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = StatusCode::OK;
@@ -125,7 +205,7 @@ fn health_options() -> Response<Body> {
     response
 }
 
-fn add_health_cors(headers: &mut axum::http::HeaderMap) {
+fn add_health_cors(headers: &mut HeaderMap) {
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_ORIGIN,
         HeaderValue::from_static("*"),
