@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT"
 description = "Rust backend for 9Router with the existing Next.js dashboard retained"
 
+[[bin]]
+name = "9router-rust"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"

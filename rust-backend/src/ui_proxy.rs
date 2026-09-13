@@ -52,10 +52,19 @@ async fn proxy_websocket(
 
     let mut upstream = tokio::net::TcpStream::connect(&target_addr)
         .await
-        .map_err(|e| AppError::Upstream(format!("WebSocket connect failed to {target_addr}: {e}")))?;
+        .map_err(|e| {
+            AppError::Upstream(format!("WebSocket connect failed to {target_addr}: {e}"))
+        })?;
 
-    let path_and_query = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-    let mut req_str = format!("GET {} HTTP/1.1\r\nHost: {}:{}\r\n", path_and_query, host, port);
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    let mut req_str = format!(
+        "GET {} HTTP/1.1\r\nHost: {}:{}\r\n",
+        path_and_query, host, port
+    );
     for (k, v) in req.headers() {
         if !k.as_str().eq_ignore_ascii_case("host") {
             if let Ok(v_str) = v.to_str() {
@@ -87,7 +96,9 @@ async fn proxy_websocket(
             }
             response_bytes.extend_from_slice(&buf[..n]);
             if response_bytes.len() > MAX_HANDSHAKE_HEADER {
-                return Err(AppError::Upstream("WebSocket handshake headers exceed 64KB".into()));
+                return Err(AppError::Upstream(
+                    "WebSocket handshake headers exceed 64KB".into(),
+                ));
             }
             if let Some(pos) = response_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
                 return Ok((response_bytes, pos));
@@ -101,44 +112,44 @@ async fn proxy_websocket(
     let header_str = String::from_utf8_lossy(&response_bytes[..pos]);
     let leftover = response_bytes[pos + 4..].to_vec();
 
-            let mut lines = header_str.split("\r\n");
-            let status_line = lines.next().unwrap_or("");
-            let status_code = if status_line.contains("101") {
-                StatusCode::SWITCHING_PROTOCOLS
-            } else {
-                StatusCode::BAD_GATEWAY
-            };
+    let mut lines = header_str.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    let status_code = if status_line.contains("101") {
+        StatusCode::SWITCHING_PROTOCOLS
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
 
-            let mut resp = Response::new(Body::empty());
-            *resp.status_mut() = status_code;
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = status_code;
 
-            for line in lines {
-                if let Some((k, v)) = line.split_once(": ") {
-                    if let (Ok(hn), Ok(hv)) = (
-                        header::HeaderName::from_bytes(k.as_bytes()),
-                        header::HeaderValue::from_str(v),
-                    ) {
-                        resp.headers_mut().insert(hn, hv);
-                    }
-                }
+    for line in lines {
+        if let Some((k, v)) = line.split_once(": ") {
+            if let (Ok(hn), Ok(hv)) = (
+                header::HeaderName::from_bytes(k.as_bytes()),
+                header::HeaderValue::from_str(v),
+            ) {
+                resp.headers_mut().insert(hn, hv);
             }
+        }
+    }
 
-            tokio::spawn(async move {
-                match hyper::upgrade::on(&mut req).await {
-                    Ok(upgraded) => {
-                        let mut client_stream = hyper_util::rt::TokioIo::new(upgraded);
-                        if !leftover.is_empty() {
-                            let _ = client_stream.write_all(&leftover).await;
-                        }
-                        let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut upstream).await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Client WebSocket upgrade failed: {e}");
-                    }
+    tokio::spawn(async move {
+        match hyper::upgrade::on(&mut req).await {
+            Ok(upgraded) => {
+                let mut client_stream = hyper_util::rt::TokioIo::new(upgraded);
+                if !leftover.is_empty() {
+                    let _ = client_stream.write_all(&leftover).await;
                 }
-            });
+                let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut upstream).await;
+            }
+            Err(e) => {
+                tracing::warn!("Client WebSocket upgrade failed: {e}");
+            }
+        }
+    });
 
-            Ok(resp)
+    Ok(resp)
 }
 
 async fn proxy(
@@ -159,9 +170,14 @@ async fn proxy(
     let url = format!("{base}{pq}");
     let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes())
         .map_err(|e| AppError::Internal(e.into()))?;
-    let mut rb = state.http.request(method, &url).body(bytes);
+    let original_host = parts
+        .headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let mut rb = state.proxy_http.request(method, &url).body(bytes);
     let mut h = reqwest::header::HeaderMap::new();
-    for (k, v) in parts.headers.iter() {
+    for (k, v) in &parts.headers {
         let name = k.as_str();
         let lower = name.to_ascii_lowercase();
         if matches!(
@@ -176,6 +192,21 @@ async fn proxy(
                 | "transfer-encoding"
                 | "upgrade"
                 | "content-length"
+                | "forwarded"
+                | "x-forwarded-for"
+                | "x-forwarded-host"
+                | "x-forwarded-proto"
+                | "x-real-ip"
+                | "cf-connecting-ip"
+                | "true-client-ip"
+                | "x-client-ip"
+                | "x-cluster-client-ip"
+                | "x-9router-ui-secret"
+                | "x-9r-rust-compat"
+                | "x-9r-ui-proxy"
+                | "x-9r-real-ip"
+                | "x-9r-peer-token"
+                | "x-9r-via-proxy"
         ) {
             continue;
         }
@@ -187,12 +218,55 @@ async fn proxy(
             h.append(n, v);
         }
     }
-    if let Ok(v) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
-        h.insert(reqwest::header::HeaderName::from_static("x-9r-real-ip"), v);
+    if let Some(host) = original_host {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&host) {
+            h.insert(
+                reqwest::header::HeaderName::from_static("x-forwarded-host"),
+                value,
+            );
+        }
+    }
+    let forwarded_proto = if auth::is_loopback(peer)
+        && parts
+            .headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+    {
+        "https"
+    } else {
+        "http"
+    };
+    h.insert(
+        reqwest::header::HeaderName::from_static("x-forwarded-proto"),
+        reqwest::header::HeaderValue::from_static(forwarded_proto),
+    );
+    let client_ip = auth::rate_limit_ip(peer, &parts.headers);
+    if let Ok(v) = reqwest::header::HeaderValue::from_str(&client_ip.to_string()) {
+        h.insert(
+            reqwest::header::HeaderName::from_static("x-9r-real-ip"),
+            v.clone(),
+        );
+        h.insert(
+            reqwest::header::HeaderName::from_static("x-forwarded-for"),
+            v,
+        );
+    }
+    let secret = state.config.ui_only_header_secret.trim();
+    if secret.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "NINEROUTER_UI_SECRET must not be empty"
+        )));
     }
     h.insert(
+        reqwest::header::HeaderName::from_static("x-9router-ui-secret"),
+        reqwest::header::HeaderValue::from_str(secret).map_err(|error| {
+            AppError::Internal(anyhow::anyhow!("invalid NINEROUTER_UI_SECRET: {error}"))
+        })?,
+    );
+    h.insert(
         reqwest::header::HeaderName::from_static("x-9r-ui-proxy"),
-        reqwest::header::HeaderValue::from_static("rust-1.0.1"),
+        reqwest::header::HeaderValue::from_static(concat!("rust-", env!("CARGO_PKG_VERSION"))),
     );
     rb = rb.headers(h);
     let r = rb.send().await.map_err(|e| {
@@ -209,6 +283,7 @@ async fn proxy(
     copy_headers(&headers, out.headers_mut());
     Ok(out)
 }
+
 fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
     for (k, v) in src {
         let name = k.as_str();
@@ -224,6 +299,17 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
                 | "transfer-encoding"
                 | "upgrade"
                 | "content-length"
+                | "forwarded"
+                | "x-forwarded-for"
+                | "x-forwarded-host"
+                | "x-forwarded-proto"
+                | "x-real-ip"
+                | "x-9router-ui-secret"
+                | "x-9r-rust-compat"
+                | "x-9r-ui-proxy"
+                | "x-9r-real-ip"
+                | "x-9r-peer-token"
+                | "x-9r-via-proxy"
         ) {
             continue;
         }
@@ -236,6 +322,7 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
         }
     }
 }
+
 fn redirect(location: &str) -> Result<Response<Body>, AppError> {
     let mut r = Response::new(Body::empty());
     *r.status_mut() = StatusCode::TEMPORARY_REDIRECT;

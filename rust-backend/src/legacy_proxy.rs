@@ -2,12 +2,12 @@ use std::net::SocketAddr;
 
 use axum::{
     body::Body,
-    http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri},
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
 
-use crate::{error::AppError, state::AppState};
+use crate::{auth, error::AppError, state::AppState};
 
 pub async fn proxy_buffered(
     state: &AppState,
@@ -25,28 +25,75 @@ pub async fn proxy_buffered(
     let url = format!("{base}{pq}");
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|e| AppError::Internal(e.into()))?;
+
+    let original_host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let forwarded_proto = if auth::is_loopback(peer)
+        && headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+    {
+        "https"
+    } else {
+        "http"
+    };
+    let client_ip = auth::rate_limit_ip(peer, headers);
+
     let mut out_headers = reqwest::header::HeaderMap::new();
-    for (k, v) in headers {
-        let name = k.as_str().to_ascii_lowercase();
-        if is_hop(&name) || name == "host" || name == "content-length" {
+    for (name, value) in headers {
+        let lower = name.as_str().to_ascii_lowercase();
+        if is_hop(&lower)
+            || is_forwarding_header(&lower)
+            || is_internal_header(&lower)
+            || lower == "host"
+            || lower == "content-length"
+        {
             continue;
         }
-        if let (Ok(n), Ok(v)) = (
-            reqwest::header::HeaderName::from_bytes(k.as_str().as_bytes()),
-            reqwest::header::HeaderValue::from_bytes(v.as_bytes()),
+        if let (Ok(name), Ok(value)) = (
+            reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()),
+            reqwest::header::HeaderValue::from_bytes(value.as_bytes()),
         ) {
-            out_headers.append(n, v);
+            out_headers.append(name, value);
         }
     }
-    if let Ok(v) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
-        out_headers.insert(reqwest::header::HeaderName::from_static("x-9r-real-ip"), v);
+
+    if let Some(host) = original_host {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&host) {
+            out_headers.insert(
+                reqwest::header::HeaderName::from_static("x-forwarded-host"),
+                value,
+            );
+        }
+    }
+    out_headers.insert(
+        reqwest::header::HeaderName::from_static("x-forwarded-proto"),
+        reqwest::header::HeaderValue::from_static(forwarded_proto),
+    );
+    if let Ok(value) = reqwest::header::HeaderValue::from_str(&client_ip.to_string()) {
+        out_headers.insert(
+            reqwest::header::HeaderName::from_static("x-9r-real-ip"),
+            value.clone(),
+        );
+        out_headers.insert(
+            reqwest::header::HeaderName::from_static("x-real-ip"),
+            value.clone(),
+        );
+        out_headers.insert(
+            reqwest::header::HeaderName::from_static("x-forwarded-for"),
+            value,
+        );
     }
     out_headers.insert(
         reqwest::header::HeaderName::from_static("x-9r-rust-legacy-bridge"),
-        reqwest::header::HeaderValue::from_static("1.0.1"),
+        reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
+
     let response = state
-        .http
+        .proxy_http
         .request(method, &url)
         .headers(out_headers)
         .body(body)
@@ -70,19 +117,53 @@ pub async fn proxy_buffered(
 }
 
 fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
-    for (k, v) in src {
-        let n = k.as_str().to_ascii_lowercase();
-        if is_hop(&n) || n == "content-length" {
+    for (name, value) in src {
+        let lower = name.as_str().to_ascii_lowercase();
+        if is_hop(&lower)
+            || is_forwarding_header(&lower)
+            || is_internal_header(&lower)
+            || lower == "content-length"
+        {
             continue;
         }
-        if let (Ok(k), Ok(v)) = (
-            HeaderName::from_bytes(k.as_str().as_bytes()),
-            HeaderValue::from_bytes(v.as_bytes()),
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_str().as_bytes()),
+            HeaderValue::from_bytes(value.as_bytes()),
         ) {
-            dst.append(k, v);
+            dst.append(name, value);
         }
     }
 }
+
+fn is_internal_header(name: &str) -> bool {
+    matches!(
+        name,
+        "x-9router-ui-secret"
+            | "x-9router-runtime"
+            | "x-9r-rust-compat"
+            | "x-9r-rust-legacy-bridge"
+            | "x-9r-ui-proxy"
+            | "x-9r-real-ip"
+            | "x-9r-peer-token"
+            | "x-9r-via-proxy"
+    )
+}
+
+fn is_forwarding_header(name: &str) -> bool {
+    matches!(
+        name,
+        "forwarded"
+            | "x-forwarded-for"
+            | "x-forwarded-host"
+            | "x-forwarded-proto"
+            | "x-real-ip"
+            | "cf-connecting-ip"
+            | "true-client-ip"
+            | "x-client-ip"
+            | "x-cluster-client-ip"
+    )
+}
+
 fn is_hop(name: &str) -> bool {
     matches!(
         name,
@@ -96,4 +177,34 @@ fn is_hop(name: &str) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_forwarding_header, is_internal_header};
+
+    #[test]
+    fn legacy_bridge_rejects_client_identity_headers() {
+        for header in [
+            "forwarded",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-real-ip",
+            "cf-connecting-ip",
+        ] {
+            assert!(is_forwarding_header(header), "{header}");
+        }
+        for header in [
+            "x-9router-ui-secret",
+            "x-9router-runtime",
+            "x-9r-rust-compat",
+            "x-9r-rust-legacy-bridge",
+            "x-9r-real-ip",
+            "x-9r-peer-token",
+            "x-9r-via-proxy",
+        ] {
+            assert!(is_internal_header(header), "{header}");
+        }
+    }
 }

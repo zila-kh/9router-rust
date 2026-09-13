@@ -33,7 +33,10 @@ pub fn handle_usage_chart(
     query: Option<&str>,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let params: HashMap<String, String> = query
         .map(|q| {
@@ -59,7 +62,10 @@ pub fn handle_usage_providers(
     method: &Method,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let ids = state.db.get_distinct_providers()?;
     let nodes = state.db.list_json_table("providerNodes")?;
@@ -90,7 +96,10 @@ pub fn handle_usage_request_details(
     query: Option<&str>,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let params: HashMap<String, String> = query
         .map(|q| {
@@ -100,17 +109,17 @@ pub fn handle_usage_request_details(
         })
         .unwrap_or_default();
 
-    let page: usize = params
-        .get("page")
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(1);
+    let page: usize = params.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
     let page_size: usize = params
         .get("pageSize")
         .and_then(|p| p.parse().ok())
         .unwrap_or(20);
 
     if page < 1 {
-        return json_response(StatusCode::BAD_REQUEST, json!({"error": "Page must be >= 1"}));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "Page must be >= 1"}),
+        );
     }
     if !(1..=100).contains(&page_size) {
         return json_response(
@@ -140,23 +149,23 @@ pub fn handle_usage_request_details(
     json_response(StatusCode::OK, res)
 }
 
-pub fn handle_usage_logs(
-    state: &AppState,
-    method: &Method,
-) -> Result<Response<Body>, AppError> {
+pub fn handle_usage_logs(state: &AppState, method: &Method) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let logs = state.db.get_recent_usage_logs(200)?;
     json_response(StatusCode::OK, json!(logs))
 }
 
-pub fn handle_usage_stream(
-    state: &AppState,
-    method: &Method,
-) -> Result<Response<Body>, AppError> {
+pub fn handle_usage_stream(state: &AppState, method: &Method) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let stats = state.db.usage_stats("7d")?;
     let payload = format!("data: {}\n\n", serde_json::to_string(&stats)?);
@@ -167,14 +176,10 @@ pub fn handle_usage_stream(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),
     );
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache"),
-    );
-    resp.headers_mut().insert(
-        header::CONNECTION,
-        HeaderValue::from_static("keep-alive"),
-    );
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    resp.headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
     Ok(resp)
 }
 
@@ -184,7 +189,10 @@ pub fn handle_usage_connection(
     connection_id: &str,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let conn = state.db.provider_connection(connection_id)?;
     match conn {
@@ -197,7 +205,10 @@ pub fn handle_usage_connection(
                 "usage": { "promptTokens": 0, "completionTokens": 0, "totalTokens": 0 }
             }),
         ),
-        None => json_response(StatusCode::NOT_FOUND, json!({"error": "Connection not found"})),
+        None => json_response(
+            StatusCode::NOT_FOUND,
+            json!({"error": "Connection not found"}),
+        ),
     }
 }
 
@@ -208,7 +219,10 @@ pub async fn handle_usage_codex_reset(
 ) -> Result<Response<Body>, AppError> {
     let conn = state.db.provider_connection(connection_id)?;
     let Some(conn) = conn else {
-        return json_response(StatusCode::NOT_FOUND, json!({"error": "Connection not found"}));
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({"error": "Connection not found"}),
+        );
     };
     let provider = conn.get("provider").and_then(Value::as_str).unwrap_or("");
     if provider != "codex" {
@@ -217,7 +231,10 @@ pub async fn handle_usage_codex_reset(
             json!({"error": "Codex reset credits are only available for Codex connections."}),
         );
     }
-    let token = conn.get("accessToken").and_then(Value::as_str).unwrap_or("");
+    let token = conn
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if token.is_empty() {
         return json_response(
             StatusCode::BAD_REQUEST,
@@ -265,10 +282,9 @@ pub async fn handle_usage_codex_reset(
                 .await
             {
                 Ok(resp) if resp.status().is_success() => {
-                    let data: Value = resp
-                        .json()
-                        .await
-                        .unwrap_or(json!({ "code": "success", "reset": true, "redeemRequestId": redeem_id }));
+                    let data: Value = resp.json().await.unwrap_or(
+                        json!({ "code": "success", "reset": true, "redeemRequestId": redeem_id }),
+                    );
                     json_response(StatusCode::OK, data)
                 }
                 Ok(resp) => {
@@ -284,7 +300,10 @@ pub async fn handle_usage_codex_reset(
                 ),
             }
         }
-        _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
+        _ => json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        ),
     }
 }
 
@@ -293,7 +312,10 @@ pub fn handle_translator_load(
     query: Option<&str>,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let params: HashMap<String, String> = query
         .map(|q| {
@@ -305,7 +327,12 @@ pub fn handle_translator_load(
 
     let file = match params.get("file") {
         Some(f) if !f.is_empty() => f,
-        _ => return json_response(StatusCode::BAD_REQUEST, json!({"success": false, "error": "File parameter required"})),
+        _ => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"success": false, "error": "File parameter required"}),
+            )
+        }
     };
 
     const ALLOWED_FILES: &[&str] = &[
@@ -320,34 +347,53 @@ pub fn handle_translator_load(
     ];
 
     if !ALLOWED_FILES.contains(&file.as_str()) {
-        return json_response(StatusCode::BAD_REQUEST, json!({"success": false, "error": "Invalid file name"}));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"success": false, "error": "Invalid file name"}),
+        );
     }
 
     let logs_path = Path::new("logs").join("translator").join(file);
     if !logs_path.exists() {
-        return json_response(StatusCode::NOT_FOUND, json!({"success": false, "error": "File not found"}));
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({"success": false, "error": "File not found"}),
+        );
     }
 
     match fs::read_to_string(logs_path) {
         Ok(content) => json_response(StatusCode::OK, json!({"success": true, "content": content})),
-        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, json!({"success": false, "error": e.to_string()})),
+        Err(e) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "error": e.to_string()}),
+        ),
     }
 }
 
-pub fn handle_translator_save(
-    method: &Method,
-    body: &Value,
-) -> Result<Response<Body>, AppError> {
+pub fn handle_translator_save(method: &Method, body: &Value) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let file = match body.get("file").and_then(Value::as_str) {
         Some(f) if !f.is_empty() => f,
-        _ => return json_response(StatusCode::BAD_REQUEST, json!({"success": false, "error": "File and content required"})),
+        _ => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"success": false, "error": "File and content required"}),
+            )
+        }
     };
     let content = match body.get("content").and_then(Value::as_str) {
         Some(c) => c,
-        _ => return json_response(StatusCode::BAD_REQUEST, json!({"success": false, "error": "File and content required"})),
+        _ => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"success": false, "error": "File and content required"}),
+            )
+        }
     };
 
     const ALLOWED_FILES: &[&str] = &[
@@ -362,7 +408,10 @@ pub fn handle_translator_save(
     ];
 
     if !ALLOWED_FILES.contains(&file) {
-        return json_response(StatusCode::BAD_REQUEST, json!({"success": false, "error": "Invalid file name"}));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"success": false, "error": "Invalid file name"}),
+        );
     }
 
     let logs_dir = Path::new("logs").join("translator");
@@ -371,7 +420,10 @@ pub fn handle_translator_save(
 
     match fs::write(file_path, content) {
         Ok(_) => json_response(StatusCode::OK, json!({"success": true})),
-        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, json!({"success": false, "error": e.to_string()})),
+        Err(e) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "error": e.to_string()}),
+        ),
     }
 }
 
@@ -381,11 +433,19 @@ pub async fn handle_translator_send(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let model = match body.get("model").and_then(Value::as_str) {
         Some(m) if !m.is_empty() => m,
-        _ => return json_response(StatusCode::BAD_REQUEST, json!({"success": false, "error": "provider, model, and body required"})),
+        _ => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"success": false, "error": "provider, model, and body required"}),
+            )
+        }
     };
     let _provider = body.get("provider").and_then(Value::as_str).unwrap_or("");
     let _req_body = body.get("body").cloned().unwrap_or(json!({}));
@@ -407,13 +467,14 @@ pub async fn handle_translator_send(
     }
 }
 
-pub fn handle_translator_console_logs(
-    method: &Method,
-) -> Result<Response<Body>, AppError> {
+pub fn handle_translator_console_logs(method: &Method) -> Result<Response<Body>, AppError> {
     match method.as_str() {
         "GET" => {
             let buf = get_log_buffer();
-            let logs: Vec<String> = buf.lock().map(|g| g.iter().cloned().collect()).unwrap_or_default();
+            let logs: Vec<String> = buf
+                .lock()
+                .map(|g| g.iter().cloned().collect())
+                .unwrap_or_default();
             json_response(StatusCode::OK, json!({ "success": true, "logs": logs }))
         }
         "DELETE" => {
@@ -423,29 +484,37 @@ pub fn handle_translator_console_logs(
             }
             json_response(StatusCode::OK, json!({ "success": true }))
         }
-        _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
+        _ => json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        ),
     }
 }
 
-pub fn handle_translator_console_stream(
-    method: &Method,
-) -> Result<Response<Body>, AppError> {
+pub fn handle_translator_console_stream(method: &Method) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let buf = get_log_buffer();
-    let logs: Vec<String> = buf.lock().map(|g| g.iter().cloned().collect()).unwrap_or_default();
-    let payload = format!("data: {}\n\n", serde_json::to_string(&json!({"type": "init", "logs": logs}))?);
+    let logs: Vec<String> = buf
+        .lock()
+        .map(|g| g.iter().cloned().collect())
+        .unwrap_or_default();
+    let payload = format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({"type": "init", "logs": logs}))?
+    );
     let mut resp = Response::new(Body::from(payload));
     *resp.status_mut() = StatusCode::OK;
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),
     );
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache"),
-    );
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     Ok(resp)
 }
 
@@ -455,7 +524,10 @@ pub async fn handle_settings_proxy_test(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let test_url = body
         .get("testUrl")
@@ -509,10 +581,12 @@ mod tests {
         let save_res = handle_translator_save(
             &Method::POST,
             &json!({ "file": "1_req_client.json", "content": "test payload" }),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(save_res.status(), StatusCode::OK);
 
-        let load_res = handle_translator_load(&Method::GET, Some("file=1_req_client.json")).unwrap();
+        let load_res =
+            handle_translator_load(&Method::GET, Some("file=1_req_client.json")).unwrap();
         assert_eq!(load_res.status(), StatusCode::OK);
 
         let invalid = handle_translator_load(&Method::GET, Some("file=not_allowed.sh")).unwrap();

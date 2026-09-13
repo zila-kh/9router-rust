@@ -13,7 +13,10 @@ pub async fn handle_media_voices(
     subpath: &str,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let catalog = crate::providers::catalog();
     let media_catalog = catalog.get("media").and_then(Value::as_object);
@@ -65,7 +68,10 @@ pub async fn handle_count_tokens(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let mut chars = 0;
     if let Some(messages) = body.get("messages").and_then(Value::as_array) {
@@ -89,16 +95,26 @@ pub async fn handle_v1_search(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let query = body.get("query").and_then(Value::as_str).unwrap_or("");
     if query.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({"error": "query parameter required"}));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "query parameter required"}),
+        );
     }
 
-    let searxng_url = std::env::var("SEARXNG_URL").unwrap_or_else(|_| "http://127.0.0.1:8080/search".into());
-    let search_req = state.http.get(&searxng_url).query(&[("q", query), ("format", "json")]);
-    
+    let searxng_url =
+        std::env::var("SEARXNG_URL").unwrap_or_else(|_| "http://127.0.0.1:8080/search".into());
+    let search_req = state
+        .http
+        .get(&searxng_url)
+        .query(&[("q", query), ("format", "json")]);
+
     match search_req.send().await {
         Ok(resp) if resp.status().is_success() => {
             let data: Value = resp.json().await.unwrap_or(json!({ "results": [] }));
@@ -107,18 +123,30 @@ pub async fn handle_v1_search(
         _ => {
             // Fallback to DuckDuckGo instant API
             let ddg_url = "https://api.duckduckgo.com/";
-            match state.http.get(ddg_url).query(&[("q", query), ("format", "json"), ("no_html", "1")]).send().await {
+            match state
+                .http
+                .get(ddg_url)
+                .query(&[("q", query), ("format", "json"), ("no_html", "1")])
+                .send()
+                .await
+            {
                 Ok(resp) if resp.status().is_success() => {
                     let data: Value = resp.json().await.unwrap_or(json!({}));
                     let mut results = Vec::new();
                     if let Some(topics) = data.get("RelatedTopics").and_then(Value::as_array) {
                         for t in topics {
-                            if let (Some(text), Some(url)) = (t.get("Text").and_then(Value::as_str), t.get("FirstURL").and_then(Value::as_str)) {
+                            if let (Some(text), Some(url)) = (
+                                t.get("Text").and_then(Value::as_str),
+                                t.get("FirstURL").and_then(Value::as_str),
+                            ) {
                                 results.push(json!({ "title": text, "url": url, "content": text }));
                             }
                         }
                     }
-                    json_response(StatusCode::OK, json!({ "query": query, "results": results }))
+                    json_response(
+                        StatusCode::OK,
+                        json!({ "query": query, "results": results }),
+                    )
                 }
                 _ => json_response(StatusCode::OK, json!({ "query": query, "results": [] })),
             }
@@ -132,11 +160,17 @@ pub async fn handle_v1_web_fetch(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let url = body.get("url").and_then(Value::as_str).unwrap_or("");
     if url.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({"error": "url parameter required"}));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "url parameter required"}),
+        );
     }
 
     match state.http.get(url).send().await {
@@ -192,7 +226,10 @@ pub async fn handle_v1_videos(
                 }),
             )
         }
-        _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
+        _ => json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        ),
     }
 }
 
@@ -202,7 +239,10 @@ pub async fn handle_v1_models_info(
     query: Option<&str>,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let params: HashMap<String, String> = query
         .map(|q| {
@@ -239,7 +279,10 @@ pub async fn handle_v1_responses_compact(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     json_response(StatusCode::OK, json!({ "compact": body }))
 }
@@ -250,7 +293,10 @@ pub async fn handle_v1beta_models(
     _path: &str,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let catalog = crate::providers::catalog();
     let models = catalog.get("models").cloned().unwrap_or_else(|| json!({}));
@@ -278,14 +324,21 @@ pub async fn handle_v1_api_chat(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
-    let model = body.get("model").and_then(Value::as_str).unwrap_or("gpt-4o");
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("gpt-4o");
     let wants_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    let canonical = match crate::translate::normalize_request(body.clone(), crate::translate::Format::OpenAi) {
-        Ok(c) => c,
-        Err(e) => return Err(AppError::BadRequest(e.to_string())),
-    };
+    let canonical =
+        match crate::translate::normalize_request(body.clone(), crate::translate::Format::OpenAi) {
+            Ok(c) => c,
+            Err(e) => return Err(AppError::BadRequest(e.to_string())),
+        };
 
     let empty_headers = axum::http::HeaderMap::new();
     crate::gateway::execute_target_direct(
@@ -295,7 +348,8 @@ pub async fn handle_v1_api_chat(
         wants_stream,
         canonical,
         model,
-    ).await
+    )
+    .await
 }
 
 fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, AppError> {

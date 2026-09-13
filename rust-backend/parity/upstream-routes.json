@@ -1,5 +1,5 @@
 {
-  "upstreamCommit": "eb712ca821f0ba6bc41043fbd14494c5af5daba5",
+  "upstreamCommit": "17c4cc76877bd1755030a8414f8d0083f48dcccf",
   "routes": [
     {
       "file": "api/auth/login/route.js",
@@ -474,6 +474,18 @@
       "file": "api/oauth/kiro/social-exchange/route.js",
       "methods": [
         "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/xiaomi-mimo/api-key/route.js",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "file": "api/oauth/xiaomi-mimo/auto-import/route.js",
+      "methods": [
+        "GET"
       ]
     },
     {

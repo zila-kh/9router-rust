@@ -10,8 +10,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: vendor-pinned-frontend
+  group: vendor-pinned-frontend-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  UPSTREAM_SHA: 17c4cc76877bd1755030a8414f8d0083f48dcccf
 
 jobs:
   vendor-and-build:
@@ -29,8 +32,8 @@ jobs:
         run: |
           rm -rf /tmp/9router-upstream
           git clone --filter=blob:none https://github.com/decolua/9router.git /tmp/9router-upstream
-          git -C /tmp/9router-upstream checkout eb712ca821f0ba6bc41043fbd14494c5af5daba5
-          test "$(git -C /tmp/9router-upstream rev-parse HEAD)" = "eb712ca821f0ba6bc41043fbd14494c5af5daba5"
+          git -C /tmp/9router-upstream checkout "$UPSTREAM_SHA"
+          test "$(git -C /tmp/9router-upstream rev-parse HEAD)" = "$UPSTREAM_SHA"
       - name: Export exact provider catalog and route inventory
         shell: bash
         run: |
@@ -42,6 +45,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import json
+          import os
           import re
 
           app = Path('/tmp/9router-upstream/src/app')
@@ -54,13 +58,13 @@ jobs:
                   'methods': methods,
               })
           out = {
-              'upstreamCommit': 'eb712ca821f0ba6bc41043fbd14494c5af5daba5',
+              'upstreamCommit': os.environ['UPSTREAM_SHA'],
               'routes': routes,
           }
           Path('rust-backend/parity/upstream-routes.json').write_text(json.dumps(out, indent=2) + '\n')
           print(f'upstream route files: {len(routes)}')
           PY
-      - name: Vendor frontend source only
+      - name: Vendor frontend and internal compatibility API source
         shell: bash
         run: |
           rm -rf frontend
@@ -77,80 +81,17 @@ jobs:
             --exclude=skills \
             --exclude=rust-backend \
             /tmp/9router-upstream/ frontend/
-          rm -rf frontend/src/app/api
-          printf '%s\n' 'eb712ca821f0ba6bc41043fbd14494c5af5daba5' > frontend/.upstream-commit
-      - name: Convert Next application to UI-only mode
+          printf '%s\n' "$UPSTREAM_SHA" > frontend/.upstream-commit
+      - name: Apply secured Rust public boundary
         shell: bash
+        env:
+          NINEROUTER_UPSTREAM_SHA: ${{ env.UPSTREAM_SHA }}
+        run: bash scripts/materialize-frontend.sh frontend
+      - name: Scrub hard-coded OAuth credentials
+        shell: python
         run: |
-          cat > frontend/src/proxy.js <<'EOF'
-          import { NextResponse } from "next/server";
-
-          const RUST_BACKEND_PREFIXES = ["/api", "/v1", "/v1beta", "/responses", "/codex"];
-
-          function isBackendPath(pathname) {
-            return RUST_BACKEND_PREFIXES.some(
-              (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-            );
-          }
-
-          export default async function proxy(request) {
-            if (process.env.NINEROUTER_UI_ONLY === "1") {
-              if (isBackendPath(request.nextUrl.pathname)) {
-                return NextResponse.json(
-                  { error: "Rust backend only", code: "RUST_BACKEND_REQUIRED" },
-                  { status: 421, headers: { "Cache-Control": "no-store" } },
-                );
-              }
-              return NextResponse.next();
-            }
-            const { proxy: dashboardProxy } = await import("./dashboardGuard");
-            return dashboardProxy(request);
-          }
-
-          export const config = {
-            matcher: ["/((?!_next/static|_next/image|favicon\\.ico).*)"],
-          };
-          EOF
-
-          python3 - <<'PY'
           from pathlib import Path
-          import json
           import re
-
-          layout = Path('frontend/src/app/layout.js')
-          lines = layout.read_text().splitlines()
-          blocked = (
-              '@/lib/network/initOutboundProxy',
-              '@/shared/services/bootstrap',
-              '@/lib/consoleLogBuffer',
-              'initConsoleLogCapture();',
-          )
-          lines = [line for line in lines if not any(token in line for token in blocked)]
-          layout.write_text('\n'.join(lines) + '\n')
-
-          instrumentation = Path('frontend/src/instrumentation.js')
-          text = instrumentation.read_text()
-          text = text.replace(
-              'export async function register() {\n',
-              'export async function register() {\n  if (process.env.NINEROUTER_UI_ONLY === "1") return;\n',
-              1,
-          )
-          instrumentation.write_text(text)
-
-          next_config = Path('frontend/next.config.mjs')
-          text = next_config.read_text()
-          text = text.replace(
-              '  async rewrites() {\n    return [',
-              '  async rewrites() {\n    if (process.env.NINEROUTER_UI_ONLY === "1") return [];\n    return [',
-              1,
-          )
-          next_config.write_text(text)
-
-          package = Path('frontend/package.json')
-          data = json.loads(package.read_text())
-          data['scripts']['dev:ui'] = 'next dev --webpack --hostname 127.0.0.1 --port 20129'
-          data['scripts']['start:ui'] = 'next start --hostname 127.0.0.1 --port 20129'
-          package.write_text(json.dumps(data, indent=2) + '\n')
 
           client_id = re.compile(r'\b[0-9]{8,}-[A-Za-z0-9._-]+\.apps\.googleusercontent\.com\b')
           client_secret = re.compile(r'\bGOCSPX-[A-Za-z0-9_-]+\b')
@@ -166,22 +107,27 @@ jobs:
                   updated = client_secret.sub('env:NINEROUTER_GOOGLE_CLIENT_SECRET', updated)
                   if updated != value:
                       path.write_text(updated)
-          PY
       - name: Install and build pinned frontend
         working-directory: frontend
         run: npm install --no-audit --no-fund && npm run build
         env:
           NINEROUTER_UI_ONLY: '1'
+          NINEROUTER_COMPAT_API: '1'
+          NINEROUTER_UI_SECRET: vendor-build-only-secret
           NEXT_TELEMETRY_DISABLED: '1'
-      - name: Prove frontend is UI-only and production-buildable
+      - name: Prove frontend is isolated and production-buildable
         shell: bash
         run: |
           test -f frontend/.next/BUILD_ID
           test -f frontend/package-lock.json
-          test ! -d frontend/src/app/api
+          test -f frontend/.9router-ui-snapshot
+          test -d frontend/src/app/api
           test ! -d frontend/rust-backend
+          grep -q 'x-9router-ui-secret' frontend/src/proxy.js
           grep -q 'RUST_BACKEND_REQUIRED' frontend/src/proxy.js
-          grep -q 'NINEROUTER_UI_ONLY' frontend/src/instrumentation.js
+          grep -q 'NINEROUTER_COMPAT_API' frontend/src/instrumentation.js
+          grep -q '@/lib/network/initOutboundProxy' frontend/src/instrumentation.js
+          grep -q '@/shared/services/bootstrap' frontend/src/instrumentation.js
           ! grep -q '@/lib/network/initOutboundProxy' frontend/src/app/layout.js
           ! grep -q '@/shared/services/bootstrap' frontend/src/app/layout.js
           ! grep -q 'initConsoleLogCapture' frontend/src/app/layout.js
@@ -195,10 +141,11 @@ jobs:
           git add frontend rust-backend/assets/provider-catalog.json rust-backend/parity/upstream-routes.json
           git add -f frontend/package-lock.json
           if git diff --cached --quiet; then
-            echo 'Vendored frontend, catalog, and route inventory are already current.'
+            echo 'Vendored frontend, compatibility APIs, catalog, and route inventory are already current.'
             exit 0
           fi
-          git commit -m 'Vendor verified UI-only frontend and upstream route inventory'
-          git fetch origin main
-          git rebase origin/main
-          git push origin HEAD:main
+          git commit -m 'Vendor upstream 0.5.75 frontend and compatibility APIs'
+          branch="${GITHUB_REF_NAME}"
+          git fetch origin "$branch"
+          git rebase "origin/$branch"
+          git push origin "HEAD:$branch"

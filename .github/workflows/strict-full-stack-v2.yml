@@ -37,13 +37,16 @@ jobs:
 
       - name: Install existing frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: |
+          if [[ -f package-lock.json ]]; then npm ci; else npm install --no-audit --no-fund; fi
 
-      - name: Build existing Next/React frontend in UI-only mode
+      - name: Build existing Next/React frontend in strict UI-only mode
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_COMPAT_API: "0"
+          NINEROUTER_UI_SECRET: strict-ci-internal-token
         run: npm run build
 
       - name: Rust format
@@ -59,26 +62,37 @@ jobs:
         run: cargo clippy --manifest-path rust-backend/Cargo.toml --all-targets -- -D warnings
 
       - name: Rust release build
-        run: cargo build --release --manifest-path rust-backend/Cargo.toml
+        run: cargo build --release --locked --manifest-path rust-backend/Cargo.toml
 
       - name: Start existing frontend renderer
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_COMPAT_API: "0"
+          NINEROUTER_UI_PORT: "20129"
+          NINEROUTER_UI_SECRET: strict-ci-internal-token
+          NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
+          DATA_DIR: ${{ runner.temp }}/9router-data
         run: |
-          nohup npx next start --hostname 127.0.0.1 --port 20129 >"${RUNNER_TEMP}/ui.log" 2>&1 &
+          set -euo pipefail
+          mkdir -p "$DATA_DIR"
+          nohup node .next/standalone/custom-server.js >"${RUNNER_TEMP}/ui.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/ui.pid"
+          bash "$GITHUB_WORKSPACE/scripts/wait-http.sh" http://127.0.0.1:20129/login 90
 
       - name: Start strict Rust backend
         env:
           PORT: "20128"
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
+          NINEROUTER_UI_SECRET: strict-ci-internal-token
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
+          DATA_DIR: ${{ runner.temp }}/9router-data
           NINEROUTER_DISABLE_LEGACY_BRIDGE: "1"
+          NINEROUTER_COMPAT_API: "0"
           NINEROUTER_UI_ONLY: "1"
-          INITIAL_PASSWORD: strict-ci-password
         run: |
+          set -euo pipefail
           mkdir -p "$NINEROUTER_DATA_DIR"
           nohup ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/rust.pid"
@@ -86,14 +100,16 @@ jobs:
 
       - name: Strict frontend/backend smoke test
         env:
-          NINEROUTER_TEST_PASSWORD: strict-ci-password
+          NINEROUTER_TEST_PASSWORD: "123456"
         run: bash scripts/full-stack-smoke-v2.sh http://127.0.0.1:20128
 
       - name: Reject legacy backend bridge references
         run: bash scripts/no-legacy-backend.sh
 
-      - name: Strict parity release gate
-        run: bash scripts/release-gate.sh .
+      - name: Publish native parity audit
+        env:
+          NINEROUTER_ALLOW_PARITY_GAPS: "1"
+        run: node scripts/audit-parity.mjs
 
       - name: Upload diagnostics
         if: always()

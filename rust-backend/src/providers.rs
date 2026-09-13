@@ -1,6 +1,7 @@
 use crate::{error::AppError, state::AppState};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 fn resolve_env_placeholders_with<F>(value: &mut Value, lookup: &F)
 where
@@ -149,20 +150,53 @@ pub fn canonical_provider(id: &str) -> String {
 }
 
 pub fn resolve_model(state: &AppState, requested: &str) -> Result<ResolvedModel, AppError> {
-    let (explicit, model) = split_model(requested);
-    if let Some(p) = explicit {
-        return resolve_for_provider(state, p, requested, model);
-    }
-    if let Some(target) = state
-        .db
-        .kv_get("modelAliases", requested)?
-        .and_then(|v| v.as_str().map(str::to_string))
-    {
-        return resolve_model(state, &target);
-    }
     let aliases = state.db.kv_all("modelAliases")?;
-    if let Some((target, _)) = aliases.iter().find(|(_, v)| v.as_str() == Some(requested)) {
-        return resolve_model(state, target);
+    let mut candidate = requested.to_string();
+    let mut visited = HashSet::new();
+
+    loop {
+        if !visited.insert(candidate.clone()) {
+            return Err(AppError::BadRequest(format!(
+                "model alias graph for {requested} is cyclic"
+            )));
+        }
+        if visited.len() > 64 {
+            return Err(AppError::BadRequest(
+                "model alias graph exceeds the maximum depth".into(),
+            ));
+        }
+
+        let (explicit, model) = split_model(&candidate);
+        if let Some(provider) = explicit {
+            let mut resolved = resolve_for_provider(state, provider, &candidate, model)?;
+            resolved.requested = requested.to_string();
+            return Ok(resolved);
+        }
+
+        // Preserve the original alias precedence: configured aliases must be
+        // followed before provider-name inference or catalog discovery.
+        if let Some(target) = aliases.get(&candidate).and_then(Value::as_str) {
+            candidate = target.to_string();
+            continue;
+        }
+        if let Some((target, _)) = aliases
+            .iter()
+            .find(|(_, value)| value.as_str() == Some(candidate.as_str()))
+        {
+            candidate = target.clone();
+            continue;
+        }
+
+        let mut resolved = resolve_unaliased(state, &candidate)?;
+        resolved.requested = requested.to_string();
+        return Ok(resolved);
+    }
+}
+
+fn resolve_unaliased(state: &AppState, requested: &str) -> Result<ResolvedModel, AppError> {
+    let (explicit, model) = split_model(requested);
+    if let Some(provider) = explicit {
+        return resolve_for_provider(state, provider, requested, model);
     }
     let inferred = if requested.starts_with("claude-") {
         Some("anthropic")
@@ -179,41 +213,41 @@ pub fn resolve_model(state: &AppState, requested: &str) -> Result<ResolvedModel,
     } else {
         None
     };
-    if let Some(p) = inferred {
-        if let Ok(r) = resolve_for_provider(state, p, requested, model) {
-            return Ok(r);
+    if let Some(provider) = inferred {
+        if let Ok(resolved) = resolve_for_provider(state, provider, requested, model) {
+            return Ok(resolved);
         }
     }
     let active = state.db.provider_connections(None, Some(true))?;
-    for c in &active {
-        if c.get("defaultModel").and_then(Value::as_str) == Some(requested) {
-            let p = c
+    for connection in &active {
+        if connection.get("defaultModel").and_then(Value::as_str) == Some(requested) {
+            let provider = connection
                 .get("provider")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             return Ok(ResolvedModel {
                 requested: requested.into(),
-                provider: p.into(),
+                provider: provider.into(),
                 model: model.into(),
-                connection: c.clone(),
+                connection: connection.clone(),
             });
         }
     }
     let mut candidates = Vec::new();
     if let Some(entries) = CATALOG.get("registry").and_then(Value::as_array) {
-        for e in entries {
-            let p = e.get("id").and_then(Value::as_str).unwrap_or_default();
-            if models_for(p)
+        for entry in entries {
+            let provider = entry.get("id").and_then(Value::as_str).unwrap_or_default();
+            if models_for(provider)
                 .iter()
-                .any(|m| m.get("id").and_then(Value::as_str) == Some(model))
+                .any(|candidate| candidate.get("id").and_then(Value::as_str) == Some(model))
             {
-                candidates.push(p)
+                candidates.push(provider);
             }
         }
     }
-    for p in candidates {
-        if let Ok(r) = resolve_for_provider(state, p, requested, model) {
-            return Ok(r);
+    for provider in candidates {
+        if let Ok(resolved) = resolve_for_provider(state, provider, requested, model) {
+            return Ok(resolved);
         }
     }
     Err(AppError::NotFound(format!(
@@ -359,8 +393,29 @@ pub fn endpoint(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_env_placeholders_with;
+    use super::{resolve_env_placeholders_with, resolve_model};
+    use crate::{config::Config, db::Db, error::AppError, state::AppState};
     use serde_json::json;
+
+    fn test_state() -> (tempfile::TempDir, AppState) {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&data_dir).expect("create data directory");
+        let db_path = data_dir.join("data.sqlite");
+        let db = Db::open(&db_path).expect("open test database");
+        let config = Config {
+            listen: "127.0.0.1:0".parse().expect("test socket address"),
+            ui_origin: "http://127.0.0.1:20129".into(),
+            data_dir,
+            db_path,
+            upstream_timeout_secs: 5,
+            ui_only_header_secret: "test-secret".into(),
+            legacy_backend_origin: None,
+            compat_api_enabled: false,
+        };
+        let state = AppState::new(config, db).expect("test application state");
+        (temp, state)
+    }
 
     #[test]
     fn resolves_nested_environment_placeholders() {
@@ -385,5 +440,64 @@ mod tests {
         let mut value = json!({"token": "env:MISSING_TOKEN"});
         resolve_env_placeholders_with(&mut value, &|_| None);
         assert_eq!(value["token"], "");
+    }
+
+    #[test]
+    fn model_alias_cycles_return_an_error_without_recursing() {
+        let (_temp, state) = test_state();
+        state
+            .db
+            .kv_set("modelAliases", "alias-a", &json!("alias-b"))
+            .expect("store first alias");
+        state
+            .db
+            .kv_set("modelAliases", "alias-b", &json!("alias-a"))
+            .expect("store second alias");
+
+        match resolve_model(&state, "alias-a") {
+            Err(AppError::BadRequest(message)) => assert!(message.contains("cyclic")),
+            other => panic!("expected cyclic alias error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn model_aliases_support_current_and_legacy_orientation() {
+        for (key, value, requested) in [
+            ("friendly", "openai/model-x", "friendly"),
+            ("openai/model-x", "legacy-friendly", "legacy-friendly"),
+        ] {
+            let (_temp, state) = test_state();
+            state
+                .db
+                .create_connection(json!({"provider":"openai","apiKey":"test-key"}))
+                .expect("create provider connection");
+            state
+                .db
+                .kv_set("modelAliases", key, &json!(value))
+                .expect("store model alias");
+
+            let resolved = resolve_model(&state, requested).expect("resolve model alias");
+            assert_eq!(resolved.requested, requested);
+            assert_eq!(resolved.provider, "openai");
+            assert_eq!(resolved.model, "model-x");
+        }
+    }
+
+    #[test]
+    fn configured_aliases_take_precedence_over_provider_inference() {
+        let (_temp, state) = test_state();
+        state
+            .db
+            .create_connection(json!({"provider":"openai","apiKey":"test-key"}))
+            .expect("create provider connection");
+        state
+            .db
+            .kv_set("modelAliases", "gpt-friendly", &json!("openai/model-x"))
+            .expect("store model alias");
+
+        let resolved = resolve_model(&state, "gpt-friendly").expect("resolve model alias");
+        assert_eq!(resolved.requested, "gpt-friendly");
+        assert_eq!(resolved.provider, "openai");
+        assert_eq!(resolved.model, "model-x");
     }
 }

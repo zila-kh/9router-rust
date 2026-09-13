@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use crate::{error::AppError, state::AppState};
 
 pub const LOCALES: &[&str] = &[
-    "en", "vi", "zh-CN", "zh-TW", "ja", "pt-BR", "pt-PT", "ko", "es", "de", "fr", "he", "ar",
-    "ru", "pl", "cs", "nl", "tr", "uk", "tl", "id", "km", "th", "hi", "bn", "ur", "ro", "sv",
-    "it", "el", "hu", "fi", "da", "no", "fa",
+    "en", "vi", "zh-CN", "zh-TW", "ja", "pt-BR", "pt-PT", "ko", "es", "de", "fr", "he", "ar", "ru",
+    "pl", "cs", "nl", "tr", "uk", "tl", "id", "km", "th", "hi", "bn", "ur", "ro", "sv", "it", "el",
+    "hu", "fi", "da", "no", "fa",
 ];
 
 pub fn normalize_locale(l: &str) -> &'static str {
@@ -61,7 +61,10 @@ pub fn is_supported_locale(l: &str) -> bool {
 
 pub fn handle_locale(method: &Method, body: &Value) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let req_locale = body.get("locale").and_then(Value::as_str).unwrap_or("");
     if req_locale.is_empty() || !is_supported_locale(req_locale) {
@@ -69,7 +72,10 @@ pub fn handle_locale(method: &Method, body: &Value) -> Result<Response<Body>, Ap
     }
     let normalized = normalize_locale(req_locale);
     let cookie_val = format!("locale={normalized}; Path=/; Max-Age=31536000; SameSite=Lax");
-    let mut resp = json_response(StatusCode::OK, json!({"success": true, "locale": normalized}))?;
+    let mut resp = json_response(
+        StatusCode::OK,
+        json!({"success": true, "locale": normalized}),
+    )?;
     resp.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie_val).map_err(|e| AppError::Internal(e.into()))?,
@@ -143,7 +149,10 @@ pub fn handle_models_disabled(
             state.db.enable_models(provider_alias, &ids)?;
             json_response(StatusCode::OK, json!({ "success": true }))
         }
-        _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
+        _ => json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        ),
     }
 }
 
@@ -169,10 +178,7 @@ pub fn handle_models_availability(
                     .or_else(|| conn.get("email").and_then(Value::as_str))
                     .unwrap_or(conn_id);
                 let last_error = conn.get("lastError").cloned().unwrap_or(Value::Null);
-                let test_status = conn
-                    .get("testStatus")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let test_status = conn.get("testStatus").and_then(Value::as_str).unwrap_or("");
 
                 let mut lock_count = 0;
                 if let Some(obj) = conn.as_object() {
@@ -244,8 +250,7 @@ pub fn handle_models_availability(
                     let id = conn.get("id").and_then(Value::as_str).unwrap_or("");
                     if !id.is_empty() {
                         let mut patch = json!({ lock_key.clone(): Value::Null });
-                        if conn.get("testStatus").and_then(Value::as_str) == Some("unavailable")
-                        {
+                        if conn.get("testStatus").and_then(Value::as_str) == Some("unavailable") {
                             patch["testStatus"] = json!("active");
                             patch["lastError"] = Value::Null;
                             patch["lastErrorAt"] = Value::Null;
@@ -257,7 +262,10 @@ pub fn handle_models_availability(
             }
             json_response(StatusCode::OK, json!({ "ok": true }))
         }
-        _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
+        _ => json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        ),
     }
 }
 
@@ -292,16 +300,17 @@ pub fn handle_models_catalog_sync(
             });
             json_response(StatusCode::OK, resp_payload)
         }
-        "POST" => {
-            json_response(
-                StatusCode::OK,
-                json!({
-                    "success": true,
-                    "result": { "synced": false, "source": "static-catalog", "message": "Catalog is embedded at compile time; runtime sync disabled" }
-                }),
-            )
-        }
-        _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
+        "POST" => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "result": { "synced": false, "source": "static-catalog", "message": "Catalog is embedded at compile time; runtime sync disabled" }
+            }),
+        ),
+        _ => json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        ),
     }
 }
 
@@ -311,7 +320,10 @@ pub async fn handle_models_test(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::POST {
-        return json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"}));
+        return json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        );
     }
     let model = match body.get("model").and_then(Value::as_str) {
         Some(m) if !m.is_empty() => m,
@@ -323,10 +335,16 @@ pub async fn handle_models_test(
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1
     });
-    let canonical = match crate::translate::normalize_request(ping_payload, crate::translate::Format::OpenAi) {
-        Ok(c) => c,
-        Err(e) => return json_response(StatusCode::BAD_REQUEST, json!({"ok": false, "error": e.to_string()})),
-    };
+    let canonical =
+        match crate::translate::normalize_request(ping_payload, crate::translate::Format::OpenAi) {
+            Ok(c) => c,
+            Err(e) => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({"ok": false, "error": e.to_string()}),
+                )
+            }
+        };
     let empty_headers = axum::http::HeaderMap::new();
     let start = std::time::Instant::now();
     match crate::gateway::execute_target_direct(
@@ -336,26 +354,34 @@ pub async fn handle_models_test(
         false,
         canonical,
         model,
-    ).await {
+    )
+    .await
+    {
         Ok(resp) => {
             let latency_ms = start.elapsed().as_millis() as u64;
             let is_success = resp.status().is_success();
             let status = resp.status().as_u16();
-            json_response(StatusCode::OK, json!({
-                "ok": is_success,
-                "status": status,
-                "latencyMs": latency_ms,
-                "error": if is_success { None } else { Some(format!("Model ping returned status {status}")) }
-            }))
+            json_response(
+                StatusCode::OK,
+                json!({
+                    "ok": is_success,
+                    "status": status,
+                    "latencyMs": latency_ms,
+                    "error": if is_success { None } else { Some(format!("Model ping returned status {status}")) }
+                }),
+            )
         }
         Err(e) => {
             let latency_ms = start.elapsed().as_millis() as u64;
-            json_response(StatusCode::OK, json!({
-                "ok": false,
-                "status": 502,
-                "latencyMs": latency_ms,
-                "error": e.to_string()
-            }))
+            json_response(
+                StatusCode::OK,
+                json!({
+                    "ok": false,
+                    "status": 502,
+                    "latencyMs": latency_ms,
+                    "error": e.to_string()
+                }),
+            )
         }
     }
 }
@@ -399,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_catalog_sync_handler() {
-        let dummy_cfg = crate::config::Config::from_env();
+        let dummy_cfg = crate::config::Config::from_env().unwrap();
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("test.sqlite");
         let db = crate::db::Db::open(&db_path).unwrap();

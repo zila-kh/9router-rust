@@ -6,16 +6,21 @@ PASSWORD="${NINEROUTER_TEST_PASSWORD:-123456}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+assert_native_headers() {
+  local file="$1"
+  if grep -Eqi '^x-9router-runtime:[[:space:]]*(legacy-bridge|upstream-compat)' "$file"; then
+    echo "A fallback runtime served a strict-mode request" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
 request() {
   local name="$1"; shift
   curl --silent --show-error --fail-with-body \
     --dump-header "$TMP/$name.headers" \
     --output "$TMP/$name.body" "$@"
-  if grep -qi '^x-9router-runtime:[[:space:]]*legacy-bridge' "$TMP/$name.headers"; then
-    echo "Legacy backend bridge served $name" >&2
-    cat "$TMP/$name.headers" >&2
-    exit 1
-  fi
+  assert_native_headers "$TMP/$name.headers"
 }
 
 request health "$BASE/api/health"
@@ -31,10 +36,7 @@ curl --silent --show-error --fail-with-body \
   --dump-header "$TMP/login.headers" \
   --output "$TMP/login.body" \
   "$BASE/api/auth/login"
-if grep -qi '^x-9router-runtime:[[:space:]]*legacy-bridge' "$TMP/login.headers"; then
-  echo "Legacy backend bridge served login" >&2
-  exit 1
-fi
+assert_native_headers "$TMP/login.headers"
 grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$TMP/login.body"
 
 request auth_status --cookie "$TMP/cookies" "$BASE/api/auth/status"
@@ -54,8 +56,9 @@ if [[ -n "$asset" ]]; then
   [[ -s "$TMP/next_asset.body" ]]
 fi
 
-# A protected unknown management route must fail in Rust, never bridge to Node.
-status="$(curl --silent --output "$TMP/unknown.body" --write-out '%{http_code}' --cookie "$TMP/cookies" "$BASE/api/__strict_unknown_route__")"
+# A protected unknown management route must fail in Rust, never reach Next.
+status="$(curl --silent --output "$TMP/unknown.body" --dump-header "$TMP/unknown.headers" --write-out '%{http_code}' --cookie "$TMP/cookies" "$BASE/api/__strict_unknown_route__")"
+assert_native_headers "$TMP/unknown.headers"
 case "$status" in
   404|405|501) ;;
   *) echo "Unexpected status from strict unknown route: $status" >&2; cat "$TMP/unknown.body" >&2; exit 1 ;;

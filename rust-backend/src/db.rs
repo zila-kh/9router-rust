@@ -411,7 +411,11 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
         let now = Utc::now().to_rfc3339();
         let models_s = serde_json::to_string(&models)?;
         self.with_conn(|db|{ db.execute("INSERT INTO combos(id,name,kind,models,createdAt,updatedAt) VALUES(?1,?2,?3,?4,?5,?5) ON CONFLICT(name) DO UPDATE SET kind=excluded.kind,models=excluded.models,updatedAt=excluded.updatedAt",params![id,name,kind,models_s,now])?; Ok(())})?;
-        Ok(json!({"id":id,"name":name,"kind":kind,"models":models,"createdAt":now,"updatedAt":now}))
+        self.combo_by_name(name)?.ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!(
+                "combo upsert succeeded but row was not found"
+            ))
+        })
     }
 
     pub fn provider_node(&self, id: &str) -> Result<Option<Value>, AppError> {
@@ -827,7 +831,10 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
         }
         let current_val = self.kv_get("disabledModels", provider_alias)?;
         let mut list: Vec<String> = match current_val {
-            Some(Value::Array(arr)) => arr.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+            Some(Value::Array(arr)) => arr
+                .into_iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
             _ => Vec::new(),
         };
         for id in ids {
@@ -848,7 +855,10 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
         }
         let current_val = self.kv_get("disabledModels", provider_alias)?;
         let mut list: Vec<String> = match current_val {
-            Some(Value::Array(arr)) => arr.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+            Some(Value::Array(arr)) => arr
+                .into_iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
             _ => Vec::new(),
         };
         list.retain(|item| !ids.contains(item));
@@ -1151,11 +1161,11 @@ fn counter_add(
     }
 }
 fn mask_key(key: Option<&str>) -> Option<String> {
-    key.map(|k| {
-        if k.len() <= 8 {
-            format!("{}***", k.chars().next().unwrap_or('*'))
+    key.map(|key| {
+        if key.chars().count() <= 8 {
+            format!("{}***", key.chars().next().unwrap_or('*'))
         } else {
-            format!("{}***", &k[..8])
+            format!("{}***", key.chars().take(8).collect::<String>())
         }
     })
 }
@@ -1200,4 +1210,34 @@ pub fn merge_settings_defaults(mut raw: Value) -> Value {
         }
     }
     Value::Object(d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mask_key, Db};
+    use serde_json::json;
+
+    #[test]
+    fn masks_unicode_api_keys_without_byte_slicing() {
+        assert_eq!(
+            mask_key(Some("密钥密钥密钥密钥密钥")),
+            Some("密钥密钥密钥密钥***".into())
+        );
+        assert_eq!(mask_key(Some("é")), Some("é***".into()));
+    }
+
+    #[test]
+    fn combo_upsert_returns_the_persisted_identifier() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let db = Db::open(&temp.path().join("data.sqlite")).expect("open test database");
+        let first = db
+            .upsert_combo(json!({"name":"stable","models":["one"]}))
+            .expect("insert combo");
+        let second = db
+            .upsert_combo(json!({"name":"stable","models":["two"]}))
+            .expect("update combo");
+
+        assert_eq!(first["id"], second["id"]);
+        assert_eq!(second["models"], json!(["two"]));
+    }
 }

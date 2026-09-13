@@ -14,13 +14,30 @@ mod sso_tests {
     async fn excluded_sso_never_issues_credentials() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::Db::open(&dir.path().join("sso.sqlite")).unwrap();
-        let state = AppState::new(crate::config::Config::from_env(), db).unwrap();
-        for path in ["/api/auth/oidc/start", "/api/auth/oidc/callback", "/api/auth/oidc/test", "/api/auth/saml/acs", "/api/auth/saml/start", "/api/auth/saml/test", "/api/auth/saml/metadata"] {
+        let state = AppState::new(crate::config::Config::from_env().unwrap(), db).unwrap();
+        for path in [
+            "/api/auth/oidc/start",
+            "/api/auth/oidc/callback",
+            "/api/auth/oidc/test",
+            "/api/auth/saml/acs",
+            "/api/auth/saml/start",
+            "/api/auth/saml/test",
+            "/api/auth/saml/metadata",
+        ] {
             for method in [Method::GET, Method::POST] {
-                let response = handle_oidc_saml(&state, &method, path, &json!({"email":"attacker@example.invalid"})).await.unwrap();
+                let response = handle_oidc_saml(
+                    &state,
+                    &method,
+                    path,
+                    &json!({"email":"attacker@example.invalid"}),
+                )
+                .await
+                .unwrap();
                 assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
                 assert!(!response.headers().contains_key(header::SET_COOKIE));
-                let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+                let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
                 let body: Value = serde_json::from_slice(&bytes).unwrap();
                 assert_eq!(body["code"], "SSO_DISABLED");
                 assert!(body.get("token").is_none());
@@ -68,7 +85,10 @@ pub async fn handle_cli_tools(
             state.db.kv_set("cli_settings", &scope, body)?;
             json_response(StatusCode::OK, json!({ "success": true }))
         }
-        _ => json_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "Method Not Allowed"})),
+        _ => json_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "Method Not Allowed"}),
+        ),
     }
 }
 
@@ -172,13 +192,22 @@ pub async fn handle_infra_lifecycle(
 
     if path.starts_with("/api/mcp/") {
         if path.ends_with("/sse") {
-            let mut resp = Response::new(Body::from("event: endpoint\ndata: /api/mcp/messages\n\n"));
+            let mut resp =
+                Response::new(Body::from("event: endpoint\ndata: /api/mcp/messages\n\n"));
             *resp.status_mut() = StatusCode::OK;
-            resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            resp.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/event-stream"),
+            );
             return Ok(resp);
         }
-        let _ = state.db.kv_set("mcp_messages", &uuid::Uuid::new_v4().to_string(), body);
-        return json_response(StatusCode::OK, json!({ "jsonrpc": "2.0", "result": { "supported": true } }));
+        let _ = state
+            .db
+            .kv_set("mcp_messages", &uuid::Uuid::new_v4().to_string(), body);
+        return json_response(
+            StatusCode::OK,
+            json!({ "jsonrpc": "2.0", "result": { "supported": true } }),
+        );
     }
 
     json_response(StatusCode::OK, json!({ "ok": true }))

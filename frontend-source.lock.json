@@ -1,11 +1,12 @@
 {
   "repository": "https://github.com/decolua/9router.git",
-  "commit": "eb712ca821f0ba6bc41043fbd14494c5af5daba5",
-  "upstreamVersion": "0.5.69",
-  "mode": "next-react-ui-only",
+  "commit": "17c4cc76877bd1755030a8414f8d0083f48dcccf",
+  "upstreamVersion": "0.5.75",
+  "mode": "next-react-ui-plus-secured-api-compat",
   "publicServer": "rust",
   "publicPort": 20128,
   "internalFrontendHost": "127.0.0.1",
   "internalFrontendPort": 20129,
-  "legacyBackendAllowed": false
+  "legacyBackendAllowed": false,
+  "compatApiAllowed": true
 }
