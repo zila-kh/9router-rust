@@ -16,6 +16,7 @@
 
 mod app;
 mod auth;
+mod compat_media;
 mod compat_proxy;
 mod config;
 mod db;
