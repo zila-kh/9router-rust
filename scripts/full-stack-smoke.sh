@@ -24,6 +24,24 @@ request login_page "$BASE/login"
 grep -Eqi '<!doctype html|<html' "$TMP/login_page.body"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/login_page.headers"
 
+# Locale selection is available on the login page, so its actual POST method must
+# be public before authentication and must return the locale cookie through Rust.
+request locale_set \
+  --cookie-jar "$TMP/locale-cookies" \
+  --header 'content-type: application/json' \
+  --data '{"locale":"en"}' \
+  "$BASE/api/locale"
+grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$TMP/locale_set.body"
+grep -Eq '"locale"[[:space:]]*:[[:space:]]*"en"' "$TMP/locale_set.body"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/locale_set.headers"
+grep -Eqi '^set-cookie:.*locale=en' "$TMP/locale_set.headers"
+
+locale_get_status="$(curl --silent --show-error \
+  --output "$TMP/locale-get.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/locale")"
+[[ "$locale_get_status" == 401 ]]
+
 # Public auth redirects must pass through unchanged rather than being followed by
 # Rust's HTTP client. The forwarded host also has to remain the public Rust origin.
 oidc_status="$(curl --silent --show-error \
