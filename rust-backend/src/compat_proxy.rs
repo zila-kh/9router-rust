@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use axum::{
     body::Body,
-    http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, Uri},
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -41,6 +41,10 @@ pub async fn proxy_buffered(
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|error| AppError::Internal(error.into()))?;
 
+    let original_host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let mut outbound_headers = reqwest::header::HeaderMap::new();
     for (name, value) in headers {
         let lower = name.as_str().to_ascii_lowercase();
@@ -59,9 +63,29 @@ pub async fn proxy_buffered(
         }
     }
 
+    if let Some(host) = original_host {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&host) {
+            outbound_headers.insert(
+                reqwest::header::HeaderName::from_static("x-forwarded-host"),
+                value,
+            );
+        }
+    }
+    if !outbound_headers.contains_key(reqwest::header::HeaderName::from_static(
+        "x-forwarded-proto",
+    )) {
+        outbound_headers.insert(
+            reqwest::header::HeaderName::from_static("x-forwarded-proto"),
+            reqwest::header::HeaderValue::from_static("http"),
+        );
+    }
     if let Ok(value) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
         outbound_headers.insert(
             reqwest::header::HeaderName::from_static("x-9r-real-ip"),
+            value.clone(),
+        );
+        outbound_headers.insert(
+            reqwest::header::HeaderName::from_static("x-forwarded-for"),
             value,
         );
     }
@@ -77,7 +101,7 @@ pub async fn proxy_buffered(
     );
 
     let response = state
-        .http
+        .proxy_http
         .request(method, &url)
         .headers(outbound_headers)
         .body(body)
