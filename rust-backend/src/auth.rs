@@ -1,5 +1,5 @@
 use crate::{error::AppError, state::AppState};
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{header, HeaderMap, HeaderValue};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,18 @@ type HmacSha256 = Hmac<Sha256>;
 
 const CLI_TOKEN_HEADER: &str = "x-9r-cli-token";
 const CLI_TOKEN_SALT: &str = "9r-cli-auth";
+const FORWARDED_PEER_HEADERS: &[&str] = &[
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "cf-connecting-ip",
+    "true-client-ip",
+    "x-client-ip",
+    "x-cluster-client-ip",
+    "x-9r-via-proxy",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionClaims {
@@ -43,9 +55,11 @@ pub fn extract_api_key(headers: &HeaderMap, query_key: Option<&str>) -> Option<S
 pub fn is_loopback(peer: SocketAddr) -> bool {
     is_loopback_ip(peer.ip())
 }
+
 pub fn is_loopback_ip(ip: IpAddr) -> bool {
     ip.is_loopback() || is_ipv4_mapped_loopback(ip)
 }
+
 fn is_ipv4_mapped_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V6(v6) => v6
@@ -54,6 +68,33 @@ fn is_ipv4_mapped_loopback(ip: IpAddr) -> bool {
             .unwrap_or(false),
         _ => false,
     }
+}
+
+pub fn is_direct_loopback_request(peer: SocketAddr, headers: &HeaderMap) -> bool {
+    if !is_loopback(peer)
+        || FORWARDED_PEER_HEADERS
+            .iter()
+            .any(|name| headers.contains_key(*name))
+    {
+        return false;
+    }
+
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Ok(origin) = url::Url::parse(origin) else {
+        return false;
+    };
+    let Some(host) = origin.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>().map(is_loopback_ip).unwrap_or(false)
 }
 
 fn jwt_secret(state: &AppState) -> Result<Vec<u8>, AppError> {
@@ -224,7 +265,7 @@ pub fn require_llm(
     peer: SocketAddr,
     query_key: Option<&str>,
 ) -> Result<(), AppError> {
-    if is_loopback(peer) {
+    if is_direct_loopback_request(peer, headers) || has_valid_cli_token(state, headers) {
         return Ok(());
     }
     let settings = state.db.settings()?;
@@ -276,6 +317,10 @@ pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
 mod tests {
     use super::*;
 
+    fn peer(value: &str) -> SocketAddr {
+        value.parse().expect("valid test socket address")
+    }
+
     #[test]
     fn cli_token_matches_upstream_shape() {
         let token = derive_cli_token("machine-123", "secret-456");
@@ -283,5 +328,35 @@ mod tests {
         assert_eq!(token, derive_cli_token("machine-123", "secret-456"));
         assert_ne!(token, derive_cli_token("machine-124", "secret-456"));
         assert_ne!(token, derive_cli_token("machine-123", "secret-457"));
+    }
+
+    #[test]
+    fn direct_loopback_rejects_proxy_hops_and_remote_origins() {
+        let headers = HeaderMap::new();
+        assert!(is_direct_loopback_request(
+            peer("127.0.0.1:1234"),
+            &headers
+        ));
+        assert!(!is_direct_loopback_request(
+            peer("192.0.2.20:1234"),
+            &headers
+        ));
+
+        let mut forwarded = HeaderMap::new();
+        forwarded.insert("x-forwarded-for", HeaderValue::from_static("192.0.2.20"));
+        assert!(!is_direct_loopback_request(
+            peer("127.0.0.1:1234"),
+            &forwarded
+        ));
+
+        let mut origin = HeaderMap::new();
+        origin.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://router.example.com"),
+        );
+        assert!(!is_direct_loopback_request(
+            peer("127.0.0.1:1234"),
+            &origin
+        ));
     }
 }
