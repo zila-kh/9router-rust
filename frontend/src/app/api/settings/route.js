@@ -57,10 +57,12 @@ export async function PATCH(request) {
           return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
         }
       } else {
-        // First time setting password, no current password needed
-        // Allow empty currentPassword or default "123456"
-        if (body.currentPassword && body.currentPassword !== "123456") {
-           return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
+        // First-time password setup may omit currentPassword. When supplied,
+        // validate against the configured initial password rather than assuming
+        // the literal upstream default.
+        const initialPassword = String(process.env.INITIAL_PASSWORD || "123456").trim() || "123456";
+        if (body.currentPassword && body.currentPassword !== initialPassword) {
+          return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
         }
       }
 
