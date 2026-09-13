@@ -52,11 +52,12 @@ jobs:
         working-directory: frontend
         run: |
           if [[ -f package-lock.json ]]; then npm ci; else npm install --no-audit --no-fund; fi
-      - name: Build existing Next/React UI
+      - name: Build existing Next/React UI and compatibility runtime
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_COMPAT_API: "1"
           NINEROUTER_UI_SECRET: ci-internal-route-token
         run: npm run build
 
@@ -76,11 +77,12 @@ jobs:
         working-directory: frontend
         run: |
           if [[ -f package-lock.json ]]; then npm ci; else npm install --no-audit --no-fund; fi
-      - name: Build UI
+      - name: Build UI and compatibility runtime
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_COMPAT_API: "1"
           NINEROUTER_UI_SECRET: ci-internal-route-token
         run: npm run build
       - name: Build Rust release
@@ -90,6 +92,7 @@ jobs:
           PORT: "20128"
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
+          DATA_DIR: ${{ runner.temp }}/9router-data
           NINEROUTER_UI_ONLY: "1"
           NINEROUTER_COMPAT_API: "1"
           NINEROUTER_UI_SECRET: ci-internal-route-token
