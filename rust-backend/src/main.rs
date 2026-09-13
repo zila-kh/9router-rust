@@ -23,6 +23,7 @@ mod db;
 mod error;
 mod gateway;
 mod legacy_proxy;
+mod login_limiter;
 mod management;
 mod media;
 mod protocol;
