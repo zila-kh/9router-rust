@@ -31,10 +31,23 @@ function isLoopbackAddress(value) {
   return address === "127.0.0.1" || address === "::1" || address === "localhost";
 }
 
-// Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.
-// A bare `next start` / `next dev` never loads this file, so it cannot produce a matching
-// header even though the env var is inherited by child processes. Named like x-9r-cli-token
-// so the request-detail header sanitizer redacts it too.
+function trustedForwardedProto(value) {
+  const proto = String(value || "").split(",")[0].trim().toLowerCase();
+  return proto === "https" ? "https" : "http";
+}
+
+function trustedForwardedHost(value) {
+  const authority = String(value || "").split(",")[0].trim();
+  if (!authority || authority.length > 512) return "";
+  try {
+    const parsed = new URL(`http://${authority}`);
+    return parsed.host;
+  } catch {
+    return "";
+  }
+}
+
+// Per-process proof that the peer headers below were stamped by this wrapper.
 const PEER_TOKEN = crypto.randomBytes(24).toString("hex");
 process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
 
@@ -43,72 +56,100 @@ let backgroundRefreshStarted = false;
 function startBackgroundTokenRefreshFromCustomServer() {
   if (backgroundRefreshStarted) return;
   backgroundRefreshStarted = true;
-  // Prefer source path (repo / standalone that still has src). Fail-open if missing
-  // — initializeApp also starts the same scheduler when the Next app boots.
   const modPath = path.join(__dirname, "src", "sse", "services", "backgroundTokenRefresh.js");
   import(pathToFileURL(modPath).href)
-    .then((m) => {
+    .then((module) => {
       try {
-        m.startBackgroundTokenRefresh();
-      } catch (e) {
-        console.error("[BackgroundTokenRefresh] start failed:", e && e.message ? e.message : e);
+        module.startBackgroundTokenRefresh();
+      } catch (error) {
+        console.error(
+          "[BackgroundTokenRefresh] start failed:",
+          error && error.message ? error.message : error,
+        );
       }
       const stop = () => {
         try {
-          m.stopBackgroundTokenRefresh();
+          module.stopBackgroundTokenRefresh();
         } catch {
-          /* ignore */
+          // Best-effort shutdown.
         }
       };
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);
     })
-    .catch((e) => {
-      // Expected in published CLI standalone (src/ not on disk). App bootstrap covers it.
+    .catch((error) => {
+      // Expected in published CLI standalone builds that omit src/.
       if (process.env.DEBUG_BACKGROUND_TOKEN_REFRESH) {
-        console.error("[BackgroundTokenRefresh] import failed:", e && e.message ? e.message : e);
+        console.error(
+          "[BackgroundTokenRefresh] import failed:",
+          error && error.message ? error.message : error,
+        );
       }
     });
 }
 
-// Wrap Next standalone HTTP server: derive client IP from the TCP socket
-// (unspoofable) and strip client-supplied forwarding headers so downstream
-// rate-limiting keys on the real peer address instead of attacker-controlled XFF.
+// Wrap Next's HTTP server. The private listener trusts forwarded identity only
+// when a loopback Rust proxy presents the shared per-process secret.
 http.createServer = (...args) => {
-  const handler = args.find((a) => typeof a === "function");
-  const rest = args.filter((a) => typeof a !== "function");
+  const handler = args.find((argument) => typeof argument === "function");
+  const rest = args.filter((argument) => typeof argument !== "function");
   if (!handler) return origCreate(...args);
+
   const wrapped = (req, res) => {
     const socketIp = req.socket && req.socket.remoteAddress ? req.socket.remoteAddress : "";
-    const xff = req.headers["x-forwarded-for"];
-    const xRealIp = req.headers["x-real-ip"];
     const configuredSecret = process.env.NINEROUTER_UI_SECRET || "";
     const suppliedSecret = req.headers[INTERNAL_SECRET_HEADER] || "";
-    const isLoopbackProxy = isLoopbackAddress(socketIp);
-    const trustedRustProxy = isLoopbackProxy
-      && configuredSecret
-      && timingSafeStringEqual(suppliedSecret, configuredSecret);
-    const proxyIp = trustedRustProxy
-      ? (xRealIp || (xff ? String(xff).split(",")[0].trim() : ""))
+    const trustedRustProxy = Boolean(
+      isLoopbackAddress(socketIp)
+        && configuredSecret
+        && timingSafeStringEqual(suppliedSecret, configuredSecret),
+    );
+
+    const forwardedFor = trustedRustProxy ? req.headers["x-forwarded-for"] : "";
+    const forwardedRealIp = trustedRustProxy ? req.headers["x-real-ip"] : "";
+    const forwardedHost = trustedRustProxy
+      ? trustedForwardedHost(req.headers["x-forwarded-host"])
       : "";
+    const forwardedProto = trustedRustProxy
+      ? trustedForwardedProto(req.headers["x-forwarded-proto"])
+      : "";
+    const proxyIp = forwardedRealIp
+      || (forwardedFor ? String(forwardedFor).split(",")[0].trim() : "");
     const ip = proxyIp || socketIp;
     const viaProxy = Boolean(trustedRustProxy && proxyIp && !isLoopbackAddress(proxyIp));
-    delete req.headers["x-9r-real-ip"];
-    delete req.headers["x-forwarded-for"];
-    delete req.headers["x-real-ip"];
-    delete req.headers["x-9r-via-proxy"];
-    delete req.headers["x-9r-peer-token"];
+
+    for (const name of [
+      "forwarded",
+      "x-forwarded-for",
+      "x-forwarded-host",
+      "x-forwarded-proto",
+      "x-real-ip",
+      "cf-connecting-ip",
+      "true-client-ip",
+      "x-client-ip",
+      "x-cluster-client-ip",
+      "x-9r-real-ip",
+      "x-9r-via-proxy",
+      "x-9r-peer-token",
+    ]) {
+      delete req.headers[name];
+    }
     if (!trustedRustProxy) delete req.headers[INTERNAL_SECRET_HEADER];
+
+    if (trustedRustProxy && forwardedHost) req.headers["x-forwarded-host"] = forwardedHost;
+    if (trustedRustProxy && forwardedProto) req.headers["x-forwarded-proto"] = forwardedProto;
     req.headers["x-9r-real-ip"] = ip;
     req.headers["x-9r-peer-token"] = PEER_TOKEN;
     if (viaProxy) req.headers["x-9r-via-proxy"] = "1";
-    return handler(req, res);
+
     return handler(req, res);
   };
+
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
     startBackgroundTokenRefreshFromCustomServer();
   });
+
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.
   server.emit = function (event, ...eventArgs) {
@@ -125,22 +166,29 @@ http.createServer = (...args) => {
     const chunks = [head];
     let received = head.length;
     const serve = () => {
-      // Replay the upgraded request through the existing HTTP/1.1 handler.
       const replay = new http.IncomingMessage(socket);
-      Object.assign(replay, { method: req.method, url: req.url, headers: req.headers, complete: true });
+      Object.assign(replay, {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        complete: true,
+      });
       if (received) replay.push(Buffer.concat(chunks, received).subarray(0, contentLength));
       replay.push(null);
       const res = new http.ServerResponse(replay);
       res.shouldKeepAlive = false;
       res.assignSocket(socket);
       res.once("finish", () => socket.end());
-      Promise.resolve().then(() => wrapped(replay, res)).catch((error) => {
-        console.error("Failed to downgrade h2c request", error);
-        socket.destroy();
-      });
+      Promise.resolve()
+        .then(() => wrapped(replay, res))
+        .catch((error) => {
+          console.error("Failed to downgrade h2c request", error);
+          socket.destroy();
+        });
     };
-    if (received >= contentLength) serve();
-    else {
+    if (received >= contentLength) {
+      serve();
+    } else {
       socket.on("data", function readBody(chunk) {
         chunks.push(chunk);
         received += chunk.length;
@@ -163,8 +211,8 @@ if (require.main === module) {
   if (fs.existsSync(standalone)) {
     require(standalone);
   } else {
-    // Repo checkout has no standalone build next to us. `next start` builds its HTTP
-    // server in-process, so the wrapper above still sanitizes every request.
+    // A repo checkout has no standalone build next to this file. `next start`
+    // still creates its HTTP server in-process, so the wrapper remains active.
     const nextBin = require.resolve("next/dist/bin/next");
     process.argv = [process.argv[0], nextBin, "start", ...process.argv.slice(2)];
     require(nextBin);
