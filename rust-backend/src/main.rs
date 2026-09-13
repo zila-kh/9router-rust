@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "nine_router_rs=info,9router=info".into()),
         )
         .init();
-    let cfg = Config::from_env();
+    let cfg = Config::from_env()?;
     let db = Db::open(&cfg.db_path)?;
     let addr: SocketAddr = cfg.listen;
     let state = AppState::new(cfg, db)?;
