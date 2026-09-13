@@ -220,7 +220,7 @@ pub fn dashboard_authenticated(state: &AppState, headers: &HeaderMap) -> Result<
 }
 
 pub fn require_dashboard(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
-    if dashboard_authenticated(state, headers)? {
+    if has_valid_cli_token(state, headers) || dashboard_authenticated(state, headers)? {
         Ok(())
     } else {
         Err(AppError::Unauthorized)
