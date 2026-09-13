@@ -1,0 +1,135 @@
+name: Apply second-pass locale follow-up
+
+on:
+  push:
+    branches: [fix/route-policy-second-pass-2026-09]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/route-policy-second-pass-2026-09
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Add native locale setter and strict smoke coverage
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          management = Path("rust-backend/src/management.rs")
+          text = management.read_text()
+
+          old_public = '''        ("GET", "/api/health")
+              | ("GET", "/api/init")
+              | ("GET", "/api/version")
+              | ("POST", "/api/auth/login")
+          '''
+          new_public = '''        ("GET", "/api/health")
+              | ("GET", "/api/init")
+              | ("GET", "/api/version")
+              | ("POST", "/api/locale")
+              | ("POST", "/api/auth/login")
+          '''
+          if text.count(old_public) != 1:
+              raise SystemExit("management public route block did not match exactly once")
+          text = text.replace(old_public, new_public)
+
+          old_dispatch = '''        ("GET", "/api/version") => json_response(
+              StatusCode::OK,
+              json!({"version":env!("CARGO_PKG_VERSION"),"name":"9router-rust","rustBackend":true,"upstreamVersion":"0.5.75"}),
+          ),
+          ("GET", "/api/rust/parity") => json_response(
+          '''
+          new_dispatch = '''        ("GET", "/api/version") => json_response(
+              StatusCode::OK,
+              json!({"version":env!("CARGO_PKG_VERSION"),"name":"9router-rust","rustBackend":true,"upstreamVersion":"0.5.75"}),
+          ),
+          ("POST", "/api/locale") => locale_update(body),
+          ("GET", "/api/rust/parity") => json_response(
+          '''
+          if text.count(old_dispatch) != 1:
+              raise SystemExit("management locale dispatch insertion point did not match exactly once")
+          text = text.replace(old_dispatch, new_dispatch)
+
+          marker = '''fn login(
+              state: &AppState,
+          '''
+          addition = '''const SUPPORTED_LOCALES: &[&str] = &[
+              "en", "vi", "zh-CN", "zh-TW", "ja", "pt-BR", "pt-PT", "ko", "es", "de", "fr",
+              "he", "ar", "ru", "pl", "cs", "nl", "tr", "uk", "tl", "id", "km", "th", "hi",
+              "bn", "ur", "ro", "sv", "it", "el", "hu", "fi", "da", "no", "fa",
+          ];
+
+          fn locale_update(body: Value) -> Result<Response<Body>, AppError> {
+              let locale = body
+                  .get("locale")
+                  .and_then(Value::as_str)
+                  .ok_or_else(|| AppError::BadRequest("Invalid locale".into()))?;
+              if !SUPPORTED_LOCALES.contains(&locale) {
+                  return Err(AppError::BadRequest("Invalid locale".into()));
+              }
+
+              let mut response = json_response_no_store(
+                  StatusCode::OK,
+                  json!({"success":true,"locale":locale}),
+              )?;
+              response.headers_mut().append(
+                  header::SET_COOKIE,
+                  HeaderValue::from_str(&format!(
+                      "locale={locale}; Path=/; Max-Age=31536000; SameSite=Lax"
+                  ))
+                  .map_err(|error| AppError::Internal(error.into()))?,
+              );
+              Ok(response)
+          }
+
+          fn login(
+              state: &AppState,
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit("management locale helper insertion point did not match exactly once")
+          management.write_text(text.replace(marker, addition))
+
+          smoke = Path("scripts/full-stack-smoke-v2.sh")
+          text = smoke.read_text()
+          marker = '''request login_page "$BASE/login"
+          grep -Eqi '<!doctype html|<html' "$TMP/login_page.body"
+
+          curl --silent --show-error --fail-with-body \\
+          '''
+          addition = '''request login_page "$BASE/login"
+          grep -Eqi '<!doctype html|<html' "$TMP/login_page.body"
+
+          request locale_set \\
+            --cookie-jar "$TMP/locale-cookies" \\
+            --header 'content-type: application/json' \\
+            --data '{"locale":"en"}' \\
+            "$BASE/api/locale"
+          grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$TMP/locale_set.body"
+          grep -Eq '"locale"[[:space:]]*:[[:space:]]*"en"' "$TMP/locale_set.body"
+          grep -Eqi '^set-cookie:.*locale=en' "$TMP/locale_set.headers"
+
+          curl --silent --show-error --fail-with-body \\
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit("strict smoke locale insertion point did not match exactly once")
+          smoke.write_text(text.replace(marker, addition))
+          PY
+          cargo fmt --manifest-path rust-backend/Cargo.toml --all
+          bash -n scripts/full-stack-smoke-v2.sh
+      - name: Commit patch and remove helper
+        run: |
+          rm .github/workflows/apply-second-pass-locale-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add rust-backend/src/management.rs scripts/full-stack-smoke-v2.sh .github/workflows/apply-second-pass-locale-once.yml
+          git commit -m 'fix: support locale selection in strict native mode'
+          git push origin HEAD:fix/route-policy-second-pass-2026-09
