@@ -227,8 +227,7 @@ fn is_local_oauth_action(path: &str) -> bool {
         return false;
     };
     let mut segments = rest.split('/');
-    let (Some(provider), Some(action), None) =
-        (segments.next(), segments.next(), segments.next())
+    let (Some(provider), Some(action), None) = (segments.next(), segments.next(), segments.next())
     else {
         return false;
     };
@@ -357,9 +356,7 @@ mod tests {
         assert!(is_local_only_path("/api/pxpipe/logs"));
         assert!(is_local_only_path("/api/cli-tools/codex-settings"));
         assert!(is_local_only_path("/api/mcp/tools"));
-        assert!(is_local_only_path(
-            "/api/oauth/xiaomi-mimo/auto-import"
-        ));
+        assert!(is_local_only_path("/api/oauth/xiaomi-mimo/auto-import"));
         assert!(!is_local_only_path("/api/providers"));
     }
 
