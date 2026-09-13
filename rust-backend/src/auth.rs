@@ -333,10 +333,7 @@ mod tests {
     #[test]
     fn direct_loopback_rejects_proxy_hops_and_remote_origins() {
         let headers = HeaderMap::new();
-        assert!(is_direct_loopback_request(
-            peer("127.0.0.1:1234"),
-            &headers
-        ));
+        assert!(is_direct_loopback_request(peer("127.0.0.1:1234"), &headers));
         assert!(!is_direct_loopback_request(
             peer("192.0.2.20:1234"),
             &headers
@@ -354,9 +351,6 @@ mod tests {
             header::ORIGIN,
             HeaderValue::from_static("https://router.example.com"),
         );
-        assert!(!is_direct_loopback_request(
-            peer("127.0.0.1:1234"),
-            &origin
-        ));
+        assert!(!is_direct_loopback_request(peer("127.0.0.1:1234"), &origin));
     }
 }
