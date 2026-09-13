@@ -115,6 +115,8 @@ scripts['lint'] = 'eslint . --max-warnings=0'
 scripts.pop('cli:pack', None)
 scripts.pop('cli:publish', None)
 data.setdefault('dependencies', {})['monaco-editor'] = '^0.56.0'
+# Monaco pins an older sanitizer; retain the reviewed patch on rematerialization.
+data.setdefault('overrides', {})['dompurify'] = '3.4.13'
 data['comment_better_sqlite3'] = (
     "kept in optionalDependencies so npm install doesn't fail on systems without "
     "build tools — sql.js is used as fallback at runtime"

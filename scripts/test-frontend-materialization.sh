@@ -38,6 +38,9 @@ if (pkg.scripts?.["cli:pack"] || pkg.scripts?.["cli:publish"]) {
 if (pkg.dependencies?.["monaco-editor"] !== "^0.56.0") {
   throw new Error("materialization did not restore the reviewed dependency manifest");
 }
+if (pkg.overrides?.dompurify !== "3.4.13") {
+  throw new Error("materialization lost the patched DOMPurify override");
+}
 NODE
 
 grep -q 'x-9router-ui-secret' "$TMP/frontend/custom-server.js"

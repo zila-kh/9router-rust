@@ -28,7 +28,7 @@ Production build:
 
 Both commands:
 
-1. materialize the exact pinned upstream source if the vendored frontend is stale;
+1. materialize the exact pinned upstream source when absent, or restore reviewed overlays in a recognized snapshot (unknown or different snapshots must be backed up and moved first);
 2. keep upstream `src/app/api` handlers available only on the loopback Next listener;
 3. generate one shared internal secret for Rust and Next;
 4. start Rust as the only public listener;
@@ -74,7 +74,7 @@ NINEROUTER_UI_ORIGIN=http://127.0.0.1:20129
 NINEROUTER_DISABLE_LEGACY_BRIDGE=1
 ```
 
-`NINEROUTER_DATA_DIR` and upstream `DATA_DIR` are aliases. The launchers mirror either one into the other and reject conflicting values so both processes use the same database and runtime files. In compatibility mode, do not point `NINEROUTER_DB_PATH` at a database outside `${DATA_DIR}/db/data.sqlite`, because the upstream process cannot follow that Rust-only override.
+`NINEROUTER_DATA_DIR` and upstream `DATA_DIR` are aliases. Before starting either process, all three launchers resolve them to the same absolute path, accept equivalent paths, and reject conflicting or empty values. Relative paths are resolved from the launcher working directory (the repository root for run-dev/run-prod). In compatibility mode, the launchers reject a `NINEROUTER_DB_PATH` that does not match `${DATA_DIR}/db/data.sqlite`, because the upstream process cannot follow that Rust-only override. Strict mode retains custom database-path support. Boolean compatibility settings are normalized to `1` or `0` for both runtimes.
 
 When starting the two processes manually, `NINEROUTER_UI_SECRET` must be identical in both environments. Never expose the internal Next port publicly.
 
