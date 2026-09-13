@@ -255,10 +255,7 @@ mod tests {
 
         let mut forwarded = HeaderMap::new();
         forwarded.insert("x-9r-via-proxy", HeaderValue::from_static("1"));
-        assert!(!is_safe_local_request(
-            peer("127.0.0.1:1234"),
-            &forwarded
-        ));
+        assert!(!is_safe_local_request(peer("127.0.0.1:1234"), &forwarded));
     }
 
     #[test]
@@ -274,9 +271,6 @@ mod tests {
             header::ORIGIN,
             HeaderValue::from_static("https://router.example.com"),
         );
-        assert!(!is_safe_local_request(
-            peer("127.0.0.1:1234"),
-            &headers
-        ));
+        assert!(!is_safe_local_request(peer("127.0.0.1:1234"), &headers));
     }
 }
