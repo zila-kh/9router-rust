@@ -44,9 +44,14 @@ async fn proxy(
     let url = format!("{base}{pq}");
     let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes())
         .map_err(|e| AppError::Internal(e.into()))?;
-    let mut rb = state.http.request(method, &url).body(bytes);
+    let original_host = parts
+        .headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let mut rb = state.proxy_http.request(method, &url).body(bytes);
     let mut h = reqwest::header::HeaderMap::new();
-    for (k, v) in parts.headers.iter() {
+    for (k, v) in &parts.headers {
         let name = k.as_str().to_ascii_lowercase();
         if matches!(
             name.as_str(),
@@ -70,8 +75,31 @@ async fn proxy(
             h.append(n, v);
         }
     }
+    if let Some(host) = original_host {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&host) {
+            h.insert(
+                reqwest::header::HeaderName::from_static("x-forwarded-host"),
+                value,
+            );
+        }
+    }
+    if !h.contains_key(reqwest::header::HeaderName::from_static(
+        "x-forwarded-proto",
+    )) {
+        h.insert(
+            reqwest::header::HeaderName::from_static("x-forwarded-proto"),
+            reqwest::header::HeaderValue::from_static("http"),
+        );
+    }
     if let Ok(v) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
-        h.insert(reqwest::header::HeaderName::from_static("x-9r-real-ip"), v);
+        h.insert(
+            reqwest::header::HeaderName::from_static("x-9r-real-ip"),
+            v.clone(),
+        );
+        h.insert(
+            reqwest::header::HeaderName::from_static("x-forwarded-for"),
+            v,
+        );
     }
     h.insert(
         reqwest::header::HeaderName::from_static("x-9r-ui-proxy"),
@@ -92,6 +120,7 @@ async fn proxy(
     copy_headers(&headers, out.headers_mut());
     Ok(out)
 }
+
 fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
     for (k, v) in src {
         let n = k.as_str().to_ascii_lowercase();
@@ -117,6 +146,7 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
         }
     }
 }
+
 fn redirect(location: &str) -> Result<Response<Body>, AppError> {
     let mut r = Response::new(Body::empty());
     *r.status_mut() = StatusCode::TEMPORARY_REDIRECT;

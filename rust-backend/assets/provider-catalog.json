@@ -195,6 +195,7 @@
         },
         "usage": {
           "quotaApiUrl": "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+          "quotaSummaryApiUrl": "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
           "loadProjectApiUrl": "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
           "tokenUrl": "https://oauth2.googleapis.com/token"
         },
@@ -950,11 +951,18 @@
         }
       },
       "category": "oauth",
+      "authModes": [
+        "oauth"
+      ],
+      "hasOAuth": true,
       "transport": {
         "baseUrl": "https://api.cline.bot/api/v1/chat/completions",
         "headers": {
           "HTTP-Referer": "https://cline.bot",
           "X-Title": "Cline"
+        },
+        "quirks": {
+          "clineEnvelope": true
         },
         "tokenUrl": "https://api.cline.bot/api/v1/auth/token",
         "refreshUrl": "https://api.cline.bot/api/v1/auth/refresh",
@@ -1026,8 +1034,8 @@
       },
       "category": "oauth",
       "authModes": [
-        "oauth",
-        "apikey"
+        "apikey",
+        "oauth"
       ],
       "hasOAuth": true,
       "transport": {
@@ -1035,6 +1043,9 @@
         "headers": {
           "HTTP-Referer": "https://cline.bot",
           "X-Title": "Cline"
+        },
+        "quirks": {
+          "clineEnvelope": true
         },
         "auth": {
           "combined": true,
@@ -1382,8 +1393,8 @@
           "name": "DeepSeek-V4-Pro"
         },
         {
-          "id": "deepseek-v4-flash",
-          "name": "DeepSeek-V4-Flash"
+          "id": "deepseek-v4.1-flash",
+          "name": "DeepSeek-V4.1-Flash"
         }
       ],
       "oauth": {
@@ -1434,9 +1445,10 @@
         "baseUrl": "https://chatgpt.com/backend-api/codex/responses",
         "format": "openai-responses",
         "forceStream": true,
+        "cliVersion": "0.154.0",
         "headers": {
           "originator": "codex_cli_rs",
-          "User-Agent": "codex_cli_rs/0.136.0"
+          "User-Agent": "codex_cli_rs/0.154.0"
         },
         "usage": {
           "url": "https://chatgpt.com/backend-api/wham/usage",
@@ -1518,6 +1530,91 @@
           "name": "GPT 5.3 Codex Spark Review",
           "upstreamModelId": "gpt-5.3-codex-spark",
           "quotaFamily": "review"
+        },
+        {
+          "id": "gpt-image-2.5",
+          "name": "GPT Image 2.5",
+          "capabilities": [
+            "text2img",
+            "edit",
+            "multiImage"
+          ],
+          "params": [
+            "size",
+            "quality",
+            "background",
+            "image_detail",
+            "output_format"
+          ],
+          "kind": "image"
+        },
+        {
+          "id": "gpt-image-2.5-flare",
+          "name": "GPT Image 2.5 Flare",
+          "capabilities": [
+            "text2img",
+            "edit",
+            "multiImage"
+          ],
+          "params": [
+            "size",
+            "quality",
+            "background",
+            "image_detail",
+            "output_format"
+          ],
+          "kind": "image"
+        },
+        {
+          "id": "gpt-image-2.5-sunburst",
+          "name": "GPT Image 2.5 Sunburst",
+          "capabilities": [
+            "text2img",
+            "edit",
+            "multiImage"
+          ],
+          "params": [
+            "size",
+            "quality",
+            "background",
+            "image_detail",
+            "output_format"
+          ],
+          "kind": "image"
+        },
+        {
+          "id": "gpt-image-2",
+          "name": "GPT Image 2",
+          "capabilities": [
+            "text2img",
+            "edit",
+            "multiImage"
+          ],
+          "params": [
+            "size",
+            "quality",
+            "background",
+            "image_detail",
+            "output_format"
+          ],
+          "kind": "image"
+        },
+        {
+          "id": "gpt-image-1.5",
+          "name": "GPT Image 1.5",
+          "capabilities": [
+            "text2img",
+            "edit",
+            "multiImage"
+          ],
+          "params": [
+            "size",
+            "quality",
+            "background",
+            "image_detail",
+            "output_format"
+          ],
+          "kind": "image"
         },
         {
           "id": "gpt-5.6-sol-image",
@@ -2014,6 +2111,12 @@
         "validateUrl": "https://api.deepseek.com/models",
         "reasoningInject": {
           "scope": "all"
+        },
+        "quirks": {
+          "claudeSupportedToolTypes": [
+            "web_search_20250305",
+            "web_search_20260209"
+          ]
         }
       },
       "transports": [
@@ -4452,7 +4555,8 @@
           "Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14"
         },
         "quirks": {
-          "dropOutputConfig": true
+          "dropOutputConfig": true,
+          "requireClaudeToolType": true
         },
         "reasoningInject": {
           "scope": "all"
@@ -4592,7 +4696,8 @@
           "Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14"
         },
         "quirks": {
-          "dropOutputConfig": true
+          "dropOutputConfig": true,
+          "requireClaudeToolType": true
         },
         "reasoningInject": {
           "scope": "all"
@@ -5300,6 +5405,39 @@
           "kind": "stt"
         },
         {
+          "id": "gpt-image-2.5",
+          "name": "GPT Image 2.5",
+          "params": [
+            "n",
+            "size",
+            "quality",
+            "response_format"
+          ],
+          "kind": "image"
+        },
+        {
+          "id": "gpt-image-2.5-flare",
+          "name": "GPT Image 2.5 Flare",
+          "params": [
+            "n",
+            "size",
+            "quality",
+            "response_format"
+          ],
+          "kind": "image"
+        },
+        {
+          "id": "gpt-image-2.5-sunburst",
+          "name": "GPT Image 2.5 Sunburst",
+          "params": [
+            "n",
+            "size",
+            "quality",
+            "response_format"
+          ],
+          "kind": "image"
+        },
+        {
           "id": "gpt-image-1",
           "name": "GPT Image 1",
           "params": [
@@ -5426,8 +5564,22 @@
       ],
       "models": [
         {
+          "id": "deepseek-flash",
+          "name": "DeepSeek V4.1 Flash",
+          "supportedFormats": [
+            "openai"
+          ]
+        },
+        {
           "id": "glm-5.3-flash",
           "name": "GLM 5.3 Flash (Vision)",
+          "supportedFormats": [
+            "openai"
+          ]
+        },
+        {
+          "id": "glm-5.3",
+          "name": "GLM 5.3",
           "supportedFormats": [
             "openai"
           ]
@@ -5461,6 +5613,13 @@
           ]
         },
         {
+          "id": "kimi-k3",
+          "name": "Kimi K3",
+          "supportedFormats": [
+            "openai"
+          ]
+        },
+        {
           "id": "deepseek-v4-pro",
           "name": "DeepSeek V4 Pro",
           "supportedFormats": [
@@ -5485,6 +5644,13 @@
             "openai",
             "claude",
             "openai-responses"
+          ]
+        },
+        {
+          "id": "longcat-2.0",
+          "name": "LongCat 2.0",
+          "supportedFormats": [
+            "openai"
           ]
         },
         {
@@ -5526,6 +5692,22 @@
           ]
         },
         {
+          "id": "qwen3.8-max",
+          "name": "Qwen 3.8 Max",
+          "supportedFormats": [
+            "openai",
+            "claude"
+          ]
+        },
+        {
+          "id": "qwen3.8-flash",
+          "name": "Qwen 3.8 Flash",
+          "supportedFormats": [
+            "openai",
+            "claude"
+          ]
+        },
+        {
           "id": "qwen3.7-max",
           "name": "Qwen 3.7 Max",
           "supportedFormats": [
@@ -5547,6 +5729,36 @@
           "supportedFormats": [
             "openai",
             "claude"
+          ]
+        },
+        {
+          "id": "hy4-preview",
+          "name": "Hy4 Preview",
+          "supportedFormats": [
+            "openai"
+          ]
+        },
+        {
+          "id": "hy3",
+          "name": "Hy3",
+          "supportedFormats": [
+            "openai"
+          ]
+        },
+        {
+          "id": "grok-4.6",
+          "name": "Grok 4.6",
+          "targetFormat": "openai-responses",
+          "supportedFormats": [
+            "openai-responses"
+          ]
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "name": "GPT 5.6 Luna",
+          "targetFormat": "openai-responses",
+          "supportedFormats": [
+            "openai-responses"
           ]
         },
         {
@@ -5729,13 +5941,44 @@
             "size"
           ],
           "kind": "image"
+        },
+        {
+          "id": "google/veo-3.1",
+          "name": "Veo 3.1 (via OpenRouter)",
+          "params": [
+            "duration",
+            "aspect_ratio",
+            "resolution"
+          ],
+          "kind": "video"
+        },
+        {
+          "id": "openai/sora-2-pro",
+          "name": "Sora 2 Pro (via OpenRouter)",
+          "params": [
+            "duration",
+            "aspect_ratio",
+            "resolution"
+          ],
+          "kind": "video"
+        },
+        {
+          "id": "bytedance/seedance-2.0",
+          "name": "Seedance 2.0 (via OpenRouter)",
+          "params": [
+            "duration",
+            "aspect_ratio",
+            "resolution"
+          ],
+          "kind": "video"
         }
       ],
       "serviceKinds": [
         "llm",
         "embedding",
         "tts",
-        "imageToText"
+        "imageToText",
+        "video"
       ],
       "ttsConfig": {
         "baseUrl": "https://openrouter.ai/api/v1/chat/completions",
@@ -5756,6 +5999,13 @@
       },
       "imageConfig": {
         "baseUrl": "https://openrouter.ai/api/v1/images/generations",
+        "headers": {
+          "HTTP-Referer": "https://endpoint-proxy.local",
+          "X-Title": "Endpoint Proxy"
+        }
+      },
+      "videoConfig": {
+        "baseUrl": "https://openrouter.ai/api/v1/videos",
         "headers": {
           "HTTP-Referer": "https://endpoint-proxy.local",
           "X-Title": "Endpoint Proxy"
@@ -6923,12 +7173,70 @@
         {
           "id": "gemini-2.5-flash",
           "name": "Gemini 2.5 Flash"
+        },
+        {
+          "id": "veo-3.1-generate-preview",
+          "name": "Veo 3.1 (Preview)",
+          "params": [
+            "duration",
+            "aspect_ratio",
+            "resolution",
+            "negative_prompt",
+            "seed",
+            "storage_uri",
+            "generate_audio"
+          ],
+          "kind": "video"
+        },
+        {
+          "id": "veo-3.1-fast-generate-preview",
+          "name": "Veo 3.1 Fast (Preview)",
+          "params": [
+            "duration",
+            "aspect_ratio",
+            "resolution",
+            "negative_prompt",
+            "seed",
+            "storage_uri",
+            "generate_audio"
+          ],
+          "kind": "video"
+        },
+        {
+          "id": "veo-3.0-generate-001",
+          "name": "Veo 3",
+          "params": [
+            "duration",
+            "aspect_ratio",
+            "resolution",
+            "negative_prompt",
+            "seed",
+            "storage_uri",
+            "generate_audio"
+          ],
+          "kind": "video"
+        },
+        {
+          "id": "veo-2.0-generate-001",
+          "name": "Veo 2",
+          "params": [
+            "duration",
+            "aspect_ratio",
+            "negative_prompt",
+            "seed",
+            "storage_uri"
+          ],
+          "kind": "video"
         }
       ],
       "serviceKinds": [
         "llm",
-        "imageToText"
-      ]
+        "imageToText",
+        "video"
+      ],
+      "videoConfig": {
+        "baseUrl": "https://aiplatform.googleapis.com"
+      }
     },
     {
       "id": "volcengine-ark",
@@ -7157,7 +7465,9 @@
       "priority": 290,
       "alias": "xiaomi-mimo",
       "aliases": [
-        "mimo"
+        "mimo",
+        "mimo-desktop",
+        "xmd"
       ],
       "uiAlias": "mimo",
       "display": {
@@ -7167,10 +7477,16 @@
         "textIcon": "XM",
         "website": "https://xiaomimimo.com",
         "notice": {
-          "apiKeyUrl": "https://platform.xiaomimimo.com/console/api-keys"
+          "apiKeyUrl": "https://platform.xiaomimimo.com/console/api-keys",
+          "signupUrl": "https://mimo.xiaomimimo.com/desktop/invite/"
         }
       },
-      "category": "apikey",
+      "category": "oauth",
+      "authModes": [
+        "oauth",
+        "apikey"
+      ],
+      "hasOAuth": true,
       "serviceKinds": [
         "llm",
         "tts"
@@ -7205,6 +7521,22 @@
       ],
       "models": [
         {
+          "id": "mimo-x-pro-preview",
+          "name": "MiMo-X-Pro-Preview",
+          "upstreamModelId": "xiaomi/mimo-x-pro-preview",
+          "supportedFormats": [
+            "openai"
+          ]
+        },
+        {
+          "id": "mimo-x-flash-preview",
+          "name": "MiMo-X-Flash-Preview",
+          "upstreamModelId": "xiaomi/mimo-x-flash-preview",
+          "supportedFormats": [
+            "openai"
+          ]
+        },
+        {
           "id": "mimo-v2.5-pro",
           "name": "MiMo V2.5 Pro"
         },
@@ -7231,6 +7563,16 @@
         "authType": "apikey",
         "authHeader": "bearer",
         "format": "xiaomi-mimo-tts"
+      },
+      "features": {
+        "usage": true,
+        "usageApikey": true
+      },
+      "oauth": {
+        "custom": true,
+        "authorizeUrl": "https://platform.xiaomimimo.com/authorize",
+        "callbackParam": "u",
+        "kn": "mimocode"
       }
     },
     {
@@ -7615,29 +7957,35 @@
       "authModes": [
         "apikey"
       ],
+      "passthroughModels": true,
+      "modelsFetcher": {
+        "url": "https://api.airforce/v1/models",
+        "type": "airforce-free"
+      },
       "transport": {
         "baseUrl": "https://api.airforce/v1/chat/completions",
         "validateUrl": "https://api.airforce/v1/models",
         "headers": {
           "HTTP-Referer": "https://endpoint-proxy.local",
           "X-Title": "Endpoint Proxy"
-        }
+        },
+        "forceStream": true
       },
       "models": [
         {
-          "id": "anthropic/claude-3.7-sonnet",
-          "name": "Claude 3.7 Sonnet (Free)",
-          "contextLength": 200000
+          "id": "gpt-oss-120b",
+          "name": "GPT-OSS 120B (Free)",
+          "contextLength": 131072
         },
         {
-          "id": "moonshot/kimi-k2.6",
-          "name": "Kimi K2.6 (Free)",
+          "id": "gpt-oss-20b",
+          "name": "GPT-OSS 20B (Free)",
+          "contextLength": 131072
+        },
+        {
+          "id": "kimi-k2.7-code",
+          "name": "Kimi K2.7 Code (Free)",
           "contextLength": 262144
-        },
-        {
-          "id": "google/gemini-2.5-flash",
-          "name": "Gemini 2.5 Flash (Free)",
-          "contextLength": 1048576
         }
       ]
     },
@@ -8672,6 +9020,7 @@
       },
       "usage": {
         "quotaApiUrl": "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        "quotaSummaryApiUrl": "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
         "loadProjectApiUrl": "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
         "tokenUrl": "https://oauth2.googleapis.com/token"
       },
@@ -8759,6 +9108,9 @@
         "HTTP-Referer": "https://cline.bot",
         "X-Title": "Cline"
       },
+      "quirks": {
+        "clineEnvelope": true
+      },
       "tokenUrl": "https://api.cline.bot/api/v1/auth/token",
       "refreshUrl": "https://api.cline.bot/api/v1/auth/refresh",
       "auth": {
@@ -8776,6 +9128,9 @@
       "headers": {
         "HTTP-Referer": "https://cline.bot",
         "X-Title": "Cline"
+      },
+      "quirks": {
+        "clineEnvelope": true
       },
       "auth": {
         "combined": true,
@@ -8820,9 +9175,10 @@
       "baseUrl": "https://chatgpt.com/backend-api/codex/responses",
       "format": "openai-responses",
       "forceStream": true,
+      "cliVersion": "0.154.0",
       "headers": {
         "originator": "codex_cli_rs",
-        "User-Agent": "codex_cli_rs/0.136.0"
+        "User-Agent": "codex_cli_rs/0.154.0"
       },
       "usage": {
         "url": "https://chatgpt.com/backend-api/wham/usage",
@@ -8867,6 +9223,12 @@
       "validateUrl": "https://api.deepseek.com/models",
       "reasoningInject": {
         "scope": "all"
+      },
+      "quirks": {
+        "claudeSupportedToolTypes": [
+          "web_search_20250305",
+          "web_search_20260209"
+        ]
       },
       "format": "openai",
       "transports": [
@@ -9201,7 +9563,8 @@
         "Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14"
       },
       "quirks": {
-        "dropOutputConfig": true
+        "dropOutputConfig": true,
+        "requireClaudeToolType": true
       },
       "reasoningInject": {
         "scope": "all"
@@ -9252,7 +9615,8 @@
         "Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14"
       },
       "quirks": {
-        "dropOutputConfig": true
+        "dropOutputConfig": true,
+        "requireClaudeToolType": true
       },
       "reasoningInject": {
         "scope": "all"
@@ -9582,6 +9946,7 @@
         "HTTP-Referer": "https://endpoint-proxy.local",
         "X-Title": "Endpoint Proxy"
       },
+      "forceStream": true,
       "format": "openai"
     },
     "baidu": {
@@ -10317,8 +10682,8 @@
         "name": "DeepSeek-V4-Pro"
       },
       {
-        "id": "deepseek-v4-flash",
-        "name": "DeepSeek-V4-Flash"
+        "id": "deepseek-v4.1-flash",
+        "name": "DeepSeek-V4.1-Flash"
       }
     ],
     "cx": [
@@ -10395,6 +10760,91 @@
         "name": "GPT 5.3 Codex Spark Review",
         "upstreamModelId": "gpt-5.3-codex-spark",
         "quotaFamily": "review"
+      },
+      {
+        "id": "gpt-image-2.5",
+        "name": "GPT Image 2.5",
+        "capabilities": [
+          "text2img",
+          "edit",
+          "multiImage"
+        ],
+        "params": [
+          "size",
+          "quality",
+          "background",
+          "image_detail",
+          "output_format"
+        ],
+        "kind": "image"
+      },
+      {
+        "id": "gpt-image-2.5-flare",
+        "name": "GPT Image 2.5 Flare",
+        "capabilities": [
+          "text2img",
+          "edit",
+          "multiImage"
+        ],
+        "params": [
+          "size",
+          "quality",
+          "background",
+          "image_detail",
+          "output_format"
+        ],
+        "kind": "image"
+      },
+      {
+        "id": "gpt-image-2.5-sunburst",
+        "name": "GPT Image 2.5 Sunburst",
+        "capabilities": [
+          "text2img",
+          "edit",
+          "multiImage"
+        ],
+        "params": [
+          "size",
+          "quality",
+          "background",
+          "image_detail",
+          "output_format"
+        ],
+        "kind": "image"
+      },
+      {
+        "id": "gpt-image-2",
+        "name": "GPT Image 2",
+        "capabilities": [
+          "text2img",
+          "edit",
+          "multiImage"
+        ],
+        "params": [
+          "size",
+          "quality",
+          "background",
+          "image_detail",
+          "output_format"
+        ],
+        "kind": "image"
+      },
+      {
+        "id": "gpt-image-1.5",
+        "name": "GPT Image 1.5",
+        "capabilities": [
+          "text2img",
+          "edit",
+          "multiImage"
+        ],
+        "params": [
+          "size",
+          "quality",
+          "background",
+          "image_detail",
+          "output_format"
+        ],
+        "kind": "image"
       },
       {
         "id": "gpt-5.6-sol-image",
@@ -12147,6 +12597,39 @@
         "kind": "stt"
       },
       {
+        "id": "gpt-image-2.5",
+        "name": "GPT Image 2.5",
+        "params": [
+          "n",
+          "size",
+          "quality",
+          "response_format"
+        ],
+        "kind": "image"
+      },
+      {
+        "id": "gpt-image-2.5-flare",
+        "name": "GPT Image 2.5 Flare",
+        "params": [
+          "n",
+          "size",
+          "quality",
+          "response_format"
+        ],
+        "kind": "image"
+      },
+      {
+        "id": "gpt-image-2.5-sunburst",
+        "name": "GPT Image 2.5 Sunburst",
+        "params": [
+          "n",
+          "size",
+          "quality",
+          "response_format"
+        ],
+        "kind": "image"
+      },
+      {
         "id": "gpt-image-1",
         "name": "GPT Image 1",
         "params": [
@@ -12181,8 +12664,22 @@
     ],
     "opencode-go": [
       {
+        "id": "deepseek-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "supportedFormats": [
+          "openai"
+        ]
+      },
+      {
         "id": "glm-5.3-flash",
         "name": "GLM 5.3 Flash (Vision)",
+        "supportedFormats": [
+          "openai"
+        ]
+      },
+      {
+        "id": "glm-5.3",
+        "name": "GLM 5.3",
         "supportedFormats": [
           "openai"
         ]
@@ -12216,6 +12713,13 @@
         ]
       },
       {
+        "id": "kimi-k3",
+        "name": "Kimi K3",
+        "supportedFormats": [
+          "openai"
+        ]
+      },
+      {
         "id": "deepseek-v4-pro",
         "name": "DeepSeek V4 Pro",
         "supportedFormats": [
@@ -12240,6 +12744,13 @@
           "openai",
           "claude",
           "openai-responses"
+        ]
+      },
+      {
+        "id": "longcat-2.0",
+        "name": "LongCat 2.0",
+        "supportedFormats": [
+          "openai"
         ]
       },
       {
@@ -12281,6 +12792,22 @@
         ]
       },
       {
+        "id": "qwen3.8-max",
+        "name": "Qwen 3.8 Max",
+        "supportedFormats": [
+          "openai",
+          "claude"
+        ]
+      },
+      {
+        "id": "qwen3.8-flash",
+        "name": "Qwen 3.8 Flash",
+        "supportedFormats": [
+          "openai",
+          "claude"
+        ]
+      },
+      {
         "id": "qwen3.7-max",
         "name": "Qwen 3.7 Max",
         "supportedFormats": [
@@ -12302,6 +12829,36 @@
         "supportedFormats": [
           "openai",
           "claude"
+        ]
+      },
+      {
+        "id": "hy4-preview",
+        "name": "Hy4 Preview",
+        "supportedFormats": [
+          "openai"
+        ]
+      },
+      {
+        "id": "hy3",
+        "name": "Hy3",
+        "supportedFormats": [
+          "openai"
+        ]
+      },
+      {
+        "id": "grok-4.6",
+        "name": "Grok 4.6",
+        "targetFormat": "openai-responses",
+        "supportedFormats": [
+          "openai-responses"
+        ]
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "name": "GPT 5.6 Luna",
+        "targetFormat": "openai-responses",
+        "supportedFormats": [
+          "openai-responses"
         ]
       },
       {
@@ -12423,6 +12980,36 @@
           "size"
         ],
         "kind": "image"
+      },
+      {
+        "id": "google/veo-3.1",
+        "name": "Veo 3.1 (via OpenRouter)",
+        "params": [
+          "duration",
+          "aspect_ratio",
+          "resolution"
+        ],
+        "kind": "video"
+      },
+      {
+        "id": "openai/sora-2-pro",
+        "name": "Sora 2 Pro (via OpenRouter)",
+        "params": [
+          "duration",
+          "aspect_ratio",
+          "resolution"
+        ],
+        "kind": "video"
+      },
+      {
+        "id": "bytedance/seedance-2.0",
+        "name": "Seedance 2.0 (via OpenRouter)",
+        "params": [
+          "duration",
+          "aspect_ratio",
+          "resolution"
+        ],
+        "kind": "video"
       }
     ],
     "perplexity-web": [
@@ -12901,6 +13488,60 @@
       {
         "id": "gemini-2.5-flash",
         "name": "Gemini 2.5 Flash"
+      },
+      {
+        "id": "veo-3.1-generate-preview",
+        "name": "Veo 3.1 (Preview)",
+        "params": [
+          "duration",
+          "aspect_ratio",
+          "resolution",
+          "negative_prompt",
+          "seed",
+          "storage_uri",
+          "generate_audio"
+        ],
+        "kind": "video"
+      },
+      {
+        "id": "veo-3.1-fast-generate-preview",
+        "name": "Veo 3.1 Fast (Preview)",
+        "params": [
+          "duration",
+          "aspect_ratio",
+          "resolution",
+          "negative_prompt",
+          "seed",
+          "storage_uri",
+          "generate_audio"
+        ],
+        "kind": "video"
+      },
+      {
+        "id": "veo-3.0-generate-001",
+        "name": "Veo 3",
+        "params": [
+          "duration",
+          "aspect_ratio",
+          "resolution",
+          "negative_prompt",
+          "seed",
+          "storage_uri",
+          "generate_audio"
+        ],
+        "kind": "video"
+      },
+      {
+        "id": "veo-2.0-generate-001",
+        "name": "Veo 2",
+        "params": [
+          "duration",
+          "aspect_ratio",
+          "negative_prompt",
+          "seed",
+          "storage_uri"
+        ],
+        "kind": "video"
       }
     ],
     "volcengine-ark": [
@@ -13024,6 +13665,22 @@
       }
     ],
     "xiaomi-mimo": [
+      {
+        "id": "mimo-x-pro-preview",
+        "name": "MiMo-X-Pro-Preview",
+        "upstreamModelId": "xiaomi/mimo-x-pro-preview",
+        "supportedFormats": [
+          "openai"
+        ]
+      },
+      {
+        "id": "mimo-x-flash-preview",
+        "name": "MiMo-X-Flash-Preview",
+        "upstreamModelId": "xiaomi/mimo-x-flash-preview",
+        "supportedFormats": [
+          "openai"
+        ]
+      },
       {
         "id": "mimo-v2.5-pro",
         "name": "MiMo V2.5 Pro"
@@ -13181,19 +13838,19 @@
     "zd": [],
     "af": [
       {
-        "id": "anthropic/claude-3.7-sonnet",
-        "name": "Claude 3.7 Sonnet (Free)",
-        "contextLength": 200000
+        "id": "gpt-oss-120b",
+        "name": "GPT-OSS 120B (Free)",
+        "contextLength": 131072
       },
       {
-        "id": "moonshot/kimi-k2.6",
-        "name": "Kimi K2.6 (Free)",
+        "id": "gpt-oss-20b",
+        "name": "GPT-OSS 20B (Free)",
+        "contextLength": 131072
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code (Free)",
         "contextLength": 262144
-      },
-      {
-        "id": "google/gemini-2.5-flash",
-        "name": "Gemini 2.5 Flash (Free)",
-        "contextLength": 1048576
       }
     ],
     "qianfan": [
@@ -14631,6 +15288,12 @@
       "quotaUsageUrl": "https://openapi.qoder.sh/api/v2/quota/usage",
       "loginUrl": "https://qoder.com/device/selectAccounts"
     },
+    "xiaomi-mimo": {
+      "custom": true,
+      "authorizeUrl": "https://platform.xiaomimimo.com/authorize",
+      "callbackParam": "u",
+      "kn": "mimocode"
+    },
     "codebuddy-intl": {
       "baseUrl": "https://www.codebuddy.ai",
       "stateUrl": "https://www.codebuddy.ai/v2/plugin/auth/state",
@@ -15353,7 +16016,8 @@
         "llm",
         "embedding",
         "tts",
-        "imageToText"
+        "imageToText",
+        "video"
       ],
       "ttsConfig": {
         "baseUrl": "https://openrouter.ai/api/v1/chat/completions",
@@ -15374,6 +16038,13 @@
       },
       "imageConfig": {
         "baseUrl": "https://openrouter.ai/api/v1/images/generations",
+        "headers": {
+          "HTTP-Referer": "https://endpoint-proxy.local",
+          "X-Title": "Endpoint Proxy"
+        }
+      },
+      "videoConfig": {
+        "baseUrl": "https://openrouter.ai/api/v1/videos",
         "headers": {
           "HTTP-Referer": "https://endpoint-proxy.local",
           "X-Title": "Endpoint Proxy"
@@ -15638,8 +16309,12 @@
     "vertex": {
       "serviceKinds": [
         "llm",
-        "imageToText"
-      ]
+        "imageToText",
+        "video"
+      ],
+      "videoConfig": {
+        "baseUrl": "https://aiplatform.googleapis.com"
+      }
     },
     "voyage-ai": {
       "serviceKinds": [
@@ -15706,6 +16381,12 @@
         "maxMaxResults": 100,
         "timeoutMs": 10000,
         "cacheTTLMs": 300000
+      }
+    },
+    "api-airforce": {
+      "modelsFetcher": {
+        "url": "https://api.airforce/v1/models",
+        "type": "airforce-free"
       }
     },
     "tokenrouter": {

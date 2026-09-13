@@ -5,11 +5,12 @@ BASE="${1:-http://127.0.0.1:20128}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# The migration bridge may remain as dormant source while the port is audited,
-# but a strict run must have no configured legacy origin and may never emit the
-# bridge marker on any public request.
 if [[ -n "${NINEROUTER_LEGACY_BACKEND_ORIGIN:-}" || -n "${LEGACY_BACKEND_ORIGIN:-}" ]]; then
   echo "Legacy backend origin is configured in strict mode." >&2
+  exit 1
+fi
+if [[ "${NINEROUTER_COMPAT_API:-0}" != 0 ]]; then
+  echo "Compatibility API fallback is enabled in strict mode." >&2
   exit 1
 fi
 
@@ -25,10 +26,10 @@ for path in \
     --output "$TMP/body" \
     --write-out '%{http_code}' \
     "$BASE$path" || true)"
-  if grep -qi '^x-9router-runtime:[[:space:]]*legacy-bridge' "$TMP/headers"; then
-    echo "Legacy backend bridge served $path (HTTP $code)." >&2
+  if grep -Eqi '^x-9router-runtime:[[:space:]]*(legacy-bridge|upstream-compat)' "$TMP/headers"; then
+    echo "Fallback runtime served $path in strict mode (HTTP $code)." >&2
     exit 1
   fi
 done
 
-echo "Strict runtime did not use a legacy backend bridge."
+echo "Strict runtime did not use a compatibility or legacy backend bridge."

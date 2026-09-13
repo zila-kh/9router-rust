@@ -1,6 +1,17 @@
 {
   "version": "1.0.1",
-  "upstreamCommit": "eb712ca821f0ba6bc41043fbd14494c5af5daba5",
+  "upstreamCommit": "17c4cc76877bd1755030a8414f8d0083f48dcccf",
+  "compatibilityFallback": {
+    "enabledBy": "NINEROUTER_COMPAT_API=1",
+    "runtimeHeader": "x-9router-runtime: upstream-compat",
+    "publicListener": "rust",
+    "internalHandler": "pinned Next API routes",
+    "publicApiRoutes": [
+      "/v1/videos/** -> /api/v1/videos/**",
+      "/v1/search/** -> /api/v1/search/**",
+      "/v1/web/** -> /api/v1/web/**"
+    ]
+  },
   "native": [
     "api/health/route.js",
     "api/init/route.js",
@@ -51,6 +62,13 @@
     "grpc-web",
     "sse"
   ],
+  "nativeSecurity": [
+    "dashboard JWT sessions",
+    "upstream x-9r-cli-token validation",
+    "API key validation",
+    "always-protected route classification",
+    "direct-loopback and forwarded-peer checks for host-control routes"
+  ],
   "knownNonParity": [
     "interactive OAuth provider flows and provider-specific refresh quirks",
     "SAML/OIDC login endpoints",
@@ -63,9 +81,10 @@
     "Headroom/PXPIPE management endpoints",
     "Tailscale/cloudflared tunnel management",
     "MCP endpoints",
+    "video generation/status/download/cancel routes remain compatibility-only",
+    "search and web-fetch routes remain compatibility-only",
     "remaining specialized media adapters",
-    "proxy-pool deployment/test subroutes remain bridge-only",
-    "settings database CLI-token bypass is stricter in Rust until machine-ID token derivation is ported",
+    "proxy-pool deployment/test subroutes remain compatibility-only",
     "Antigravity translator diagnostics use Gemini as the Rust intermediate instead of exposing a separate antigravity format enum"
   ]
 }

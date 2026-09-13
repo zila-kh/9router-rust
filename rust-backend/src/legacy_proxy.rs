@@ -46,7 +46,7 @@ pub async fn proxy_buffered(
         reqwest::header::HeaderValue::from_static("1.0.1"),
     );
     let response = state
-        .http
+        .proxy_http
         .request(method, &url)
         .headers(out_headers)
         .body(body)
@@ -83,6 +83,7 @@ fn copy_headers(src: &reqwest::header::HeaderMap, dst: &mut HeaderMap) {
         }
     }
 }
+
 fn is_hop(name: &str) -> bool {
     matches!(
         name,

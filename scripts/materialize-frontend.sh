@@ -4,52 +4,84 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${1:-$ROOT/frontend}"
 UPSTREAM_URL="${NINEROUTER_UPSTREAM_URL:-https://github.com/decolua/9router.git}"
-UPSTREAM_SHA="${NINEROUTER_UPSTREAM_SHA:-eb712ca821f0ba6bc41043fbd14494c5af5daba5}"
+UPSTREAM_SHA="${NINEROUTER_UPSTREAM_SHA:-17c4cc76877bd1755030a8414f8d0083f48dcccf}"
 
 case "$DEST" in
   /|""|.) echo "Refusing unsafe frontend destination: $DEST" >&2; exit 2 ;;
 esac
 
+keep_existing=0
 if [[ -d "$DEST/.git" ]]; then
   current="$(git -C "$DEST" rev-parse HEAD 2>/dev/null || true)"
   origin="$(git -C "$DEST" remote get-url origin 2>/dev/null || true)"
   if [[ "$current" == "$UPSTREAM_SHA" && "$origin" == "$UPSTREAM_URL" ]]; then
-    echo "Pinned frontend already present at $DEST"
-  else
-    rm -rf "$DEST"
+    keep_existing=1
   fi
-elif [[ -e "$DEST" ]]; then
+elif [[ -f "$DEST/package.json" && -f "$DEST/.upstream-commit" && -d "$DEST/src/app/api" ]]; then
+  current="$(tr -d '\r\n' < "$DEST/.upstream-commit")"
+  if [[ "$current" == "$UPSTREAM_SHA" ]]; then
+    keep_existing=1
+  fi
+fi
+
+if [[ "$keep_existing" != 1 && -e "$DEST" ]]; then
   rm -rf "$DEST"
 fi
 
-if [[ ! -d "$DEST/.git" ]]; then
+if [[ ! -d "$DEST" ]]; then
   git clone --filter=blob:none --no-checkout "$UPSTREAM_URL" "$DEST"
   git -C "$DEST" checkout --detach "$UPSTREAM_SHA"
 fi
 
-# Next remains the existing React UI renderer only. Rust owns authentication,
-# management APIs and all /v1 compatibility routes at the public listener.
-python3 - "$DEST" <<'PY'
+# The Next process renders the existing dashboard and retains upstream API route
+# handlers only as an internal compatibility layer. Rust remains the sole public
+# listener and authenticates every request before it may reach those handlers.
+python3 - "$DEST" "$UPSTREAM_SHA" <<'PY'
 from pathlib import Path
+import json
 import sys
 
 root = Path(sys.argv[1])
+upstream_sha = sys.argv[2]
+
 proxy = root / "src/proxy.js"
-proxy.write_text('''import { NextResponse } from "next/server";\nimport { proxy as dashboardProxy } from "./dashboardGuard";\n\nexport default async function proxy(request) {\n  // In UI-only mode the public Rust listener has already performed the security\n  // decision. Next must only render pages/assets and must never touch SQLite.\n  if (process.env.NINEROUTER_UI_ONLY === "1") return NextResponse.next();\n  return dashboardProxy(request);\n}\n\nexport const config = {\n  matcher: ["/((?!_next/static|_next/image|favicon\\\\.ico).*)"],\n};\n''', encoding="utf-8")
+proxy.write_text('''import { NextResponse } from "next/server";\n\nconst RUST_BACKEND_PREFIXES = ["/api", "/v1", "/v1beta", "/responses", "/codex"];\nconst INTERNAL_SECRET_HEADER = "x-9router-ui-secret";\n\nfunction isBackendPath(pathname) {\n  return RUST_BACKEND_PREFIXES.some(\n    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),\n  );\n}\n\nfunction isCompatApiPath(pathname) {\n  return pathname === "/api" || pathname.startsWith("/api/");\n}\n\nfunction isTrustedRustRequest(request) {\n  const configured = process.env.NINEROUTER_UI_SECRET;\n  const supplied = request.headers.get(INTERNAL_SECRET_HEADER);\n  return Boolean(configured && supplied && supplied === configured);\n}\n\nexport default async function proxy(request) {\n  if (process.env.NINEROUTER_UI_ONLY === "1") {\n    if (isCompatApiPath(request.nextUrl.pathname) && isTrustedRustRequest(request)) {\n      return NextResponse.next();\n    }\n    if (isBackendPath(request.nextUrl.pathname)) {\n      return NextResponse.json(\n        { error: "Rust backend required", code: "RUST_BACKEND_REQUIRED" },\n        { status: 421, headers: { "Cache-Control": "no-store" } },\n      );\n    }\n    return NextResponse.next();\n  }\n  const { proxy: dashboardProxy } = await import("./dashboardGuard");\n  return dashboardProxy(request);\n}\n\nexport const config = {\n  matcher: ["/((?!_next/static|_next/image|favicon\\\\.ico).*)"],\n};\n''', encoding="utf-8")
+
+layout = root / "src/app/layout.js"
+lines = layout.read_text(encoding="utf-8").splitlines()
+blocked = (
+    '@/lib/network/initOutboundProxy',
+    '@/shared/services/bootstrap',
+    '@/lib/consoleLogBuffer',
+    'initConsoleLogCapture();',
+)
+lines = [line for line in lines if not any(token in line for token in blocked)]
+layout.write_text('\n'.join(lines) + '\n', encoding="utf-8")
 
 instrumentation = root / "src/instrumentation.js"
-text = instrumentation.read_text(encoding="utf-8")
-needle = 'if (process.env.NEXT_RUNTIME === "nodejs") {'
-replacement = 'if (process.env.NEXT_RUNTIME === "nodejs" && process.env.NINEROUTER_UI_ONLY !== "1") {'
-if needle not in text and replacement not in text:
-    raise SystemExit("instrumentation.js shape changed; refusing an unsafe patch")
-instrumentation.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+instrumentation.write_text('''export async function register() {\n  if (\n    process.env.NINEROUTER_UI_ONLY === "1" &&\n    process.env.NINEROUTER_COMPAT_API !== "1"\n  ) {\n    return;\n  }\n  if (process.env.NEXT_RUNTIME === "nodejs") {\n    // The vendored layout intentionally omits backend side-effect imports. Bring\n    // them back only when Rust has enabled the secured compatibility API.\n    if (process.env.NINEROUTER_COMPAT_API === "1") {\n      await import("@/lib/network/initOutboundProxy");\n      await import("@/shared/services/bootstrap");\n    }\n\n    const { initConsoleLogCapture } = await import("@/lib/consoleLogBuffer");\n    initConsoleLogCapture();\n\n    // Server-only: lets capabilities.js read the synced catalog without pulling\n    // node:fs into the dashboard's browser bundle.\n    const { installCatalogSource } = await import("open-sse/providers/catalogOverride.js");\n    await installCatalogSource();\n\n    const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");\n    startModelCatalogSync();\n  }\n}\n''', encoding="utf-8")
 
-# Mark the checkout so support reports can prove the exact UI snapshot/mode.
+next_config = root / "next.config.mjs"
+text = next_config.read_text(encoding="utf-8")
+guard = '  async rewrites() {\n    if (process.env.NINEROUTER_UI_ONLY === "1") return [];\n'
+if guard not in text:
+    needle = '  async rewrites() {\n'
+    if needle not in text:
+        raise SystemExit("next.config.mjs rewrite shape changed; refusing an unsafe patch")
+    text = text.replace(needle, guard, 1)
+next_config.write_text(text, encoding="utf-8")
+
+package = root / "package.json"
+data = json.loads(package.read_text(encoding="utf-8"))
+data.setdefault('scripts', {})['dev:ui'] = 'next dev --webpack --hostname 127.0.0.1 --port 20129'
+data['scripts']['start:ui'] = 'next start --hostname 127.0.0.1 --port 20129'
+package.write_text(json.dumps(data, indent=2) + '\n', encoding="utf-8")
+
+(root / ".upstream-commit").write_text(upstream_sha + "\n", encoding="utf-8")
 (root / ".9router-ui-snapshot").write_text(
-    "upstream=decolua/9router\\n"
-    "commit=eb712ca821f0ba6bc41043fbd14494c5af5daba5\\n"
-    "mode=ui-only\\n",
+    "upstream=decolua/9router\n"
+    f"commit={upstream_sha}\n"
+    "mode=ui-plus-secured-api-compat\n",
     encoding="utf-8",
 )
 PY
