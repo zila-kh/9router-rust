@@ -72,15 +72,34 @@ layout = layout
 if (!layout.endsWith('\n')) layout += '\n';
 writeIfChanged('src/app/layout.js', layout);
 
-let instrumentation = read('src/instrumentation.js');
-const instrumentationGuard = '  if (process.env.NINEROUTER_UI_ONLY === "1") return;\n';
-if (!instrumentation.includes(instrumentationGuard)) {
-  const needle = 'export async function register() {\n';
-  if (!instrumentation.includes(needle)) {
-    throw new Error('src/instrumentation.js shape changed');
+const instrumentation = `export async function register() {
+  if (
+    process.env.NINEROUTER_UI_ONLY === "1" &&
+    process.env.NINEROUTER_COMPAT_API !== "1"
+  ) {
+    return;
   }
-  instrumentation = instrumentation.replace(needle, needle + instrumentationGuard);
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    // The vendored layout intentionally omits backend side-effect imports. Bring
+    // them back only when Rust has enabled the secured compatibility API.
+    if (process.env.NINEROUTER_COMPAT_API === "1") {
+      await import("@/lib/network/initOutboundProxy");
+      await import("@/shared/services/bootstrap");
+    }
+
+    const { initConsoleLogCapture } = await import("@/lib/consoleLogBuffer");
+    initConsoleLogCapture();
+
+    // Server-only: lets capabilities.js read the synced catalog without pulling
+    // node:fs into the dashboard's browser bundle.
+    const { installCatalogSource } = await import("open-sse/providers/catalogOverride.js");
+    await installCatalogSource();
+
+    const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
+    startModelCatalogSync();
+  }
 }
+`;
 writeIfChanged('src/instrumentation.js', instrumentation);
 
 let nextConfig = read('next.config.mjs');
