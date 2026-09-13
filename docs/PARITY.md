@@ -17,15 +17,17 @@ Rust remains the only public listener. For dashboard `/api/**` requests it:
 5. injects a private `x-9router-ui-secret` header;
 6. labels delegated responses `x-9router-runtime: upstream-compat`.
 
-The Next server rejects backend paths without the matching secret. `/v1`, `/v1beta`, `/responses`, and `/codex` remain Rust-owned and are never compatibility-forwarded. Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse-proxy hop from being mistaken for a local user. Always-protected update, shutdown, database, and auto-import operations require a valid dashboard session or CLI token even when normal dashboard login is disabled.
+The Next server rejects backend paths without the matching secret. Core public model paths for model listing, chat completions, Claude messages, Responses, Gemini, embeddings, audio, images, and Codex remain Rust-owned. Compatibility mode selectively maps the still-unported `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**` families to their pinned upstream `/api/v1/**` handlers. Their responses are marked `x-9router-runtime: upstream-compat` and are never counted as native coverage.
 
-Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. This mode restores broad dashboard functionality while the native port continues.
+Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse-proxy hop from being mistaken for a local user. Always-protected update, shutdown, database, and auto-import operations require a valid dashboard session or CLI token even when normal dashboard login is disabled.
+
+Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. Selective public-API compatibility also restores upstream 0.5.75 video generation/status/download/cancel, search, and web-fetch behavior while their native Rust adapters are completed.
 
 ### Strict native mode
 
 `NINEROUTER_COMPAT_API=0` and `NINEROUTER_DISABLE_LEGACY_BRIDGE=1` prohibit all fallback behavior. `scripts/run-full-stack-strict.sh` and `scripts/full-stack-smoke-v2.sh` exercise this mode.
 
-Strict mode is the only mode that should be used to claim native parity.
+Strict mode is the only mode that should be used to claim native parity. In strict mode, unported video, search, and web routes return a Rust error instead of reaching Next.
 
 ## Implemented natively
 
@@ -62,6 +64,8 @@ The manifest intentionally declares these classes of non-parity:
 - Headroom and PXPIPE lifecycle/management APIs;
 - Tailscale/cloudflared tunnel management;
 - MCP endpoints;
+- native video generation/status/download/cancel adapters;
+- native search and web-fetch adapters;
 - remaining specialized media adapters and proxy-pool deployment/test subroutes.
 
 These features are available through the pinned upstream handlers where applicable in compatibility mode, but remain real Rust-port gaps.
