@@ -8,17 +8,18 @@ The machine-readable source of truth for native Rust coverage is `rust-backend/p
 
 `NINEROUTER_COMPAT_API=1` is the default used by `scripts/run-dev.sh` and `scripts/run-prod.sh`.
 
-Rust remains the only public listener. For `/api/**` requests it:
+Rust remains the only public listener. For dashboard `/api/**` requests it:
 
-1. handles login, logout, session status, password reset, health, and native parity reporting itself;
-2. applies the Rust dashboard-authentication gate to protected compatibility routes;
-3. forwards other management requests to the exact pinned upstream route handler on the loopback Next server;
-4. injects a private `x-9router-ui-secret` header;
-5. labels the response `x-9router-runtime: upstream-compat`.
+1. keeps health, login, logout, session status, password reset, and parity reporting native;
+2. mirrors upstream public, protected, always-protected, and local-only route gates;
+3. validates the dashboard session before protected requests reach the internal server;
+4. delegates other dashboard APIs to the pinned upstream handlers so current pages retain their exact response contracts;
+5. injects a private `x-9router-ui-secret` header;
+6. labels delegated responses `x-9router-runtime: upstream-compat`.
 
-Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. The Next server rejects backend paths without the matching secret. `/v1`, `/v1beta`, `/responses`, and `/codex` remain Rust-owned and are never compatibility-forwarded.
+The Next server rejects backend paths without the matching secret. `/v1`, `/v1beta`, `/responses`, and `/codex` remain Rust-owned and are never compatibility-forwarded. Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls additionally require a direct loopback request; always-protected update, shutdown, database, and auto-import operations require a valid session even when normal dashboard login is disabled.
 
-This mode restores broad dashboard functionality while the native port continues.
+Using the upstream handler for management routes avoids partial-native response-shape drift and immediately restores newly added dashboard endpoints. This mode restores broad dashboard functionality while the native port continues.
 
 ### Strict native mode
 
