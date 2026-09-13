@@ -1,5 +1,6 @@
 use crate::{
-    auth, compat_proxy, error::AppError, gateway, management, media, state::AppState, ui_proxy,
+    auth, compat_media, compat_proxy, error::AppError, gateway, management, media,
+    state::AppState, ui_proxy,
 };
 use axum::{
     body::{to_bytes, Body},
@@ -66,7 +67,11 @@ async fn entry(
     let path = req.uri().path().to_string();
     let is_backend =
         media::is_media_path(&path) || gateway::is_llm_path(&path) || path.starts_with("/api/");
-    let result: Result<Response<Body>, AppError> = if media::is_media_path(&path) {
+    let result: Result<Response<Body>, AppError> = if state.config.compat_api_enabled
+        && compat_media::is_path(&path)
+    {
+        compat_media::handle(state, peer, req).await
+    } else if media::is_media_path(&path) {
         media::handle(state, ConnectInfo(peer), req).await
     } else if gateway::is_llm_path(&path) {
         gateway::handle(state, ConnectInfo(peer), req).await
