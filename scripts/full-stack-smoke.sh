@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BASE="${1:-http://127.0.0.1:20128}"
+UI_ORIGIN="${NINEROUTER_UI_ORIGIN:-}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -43,6 +44,25 @@ request providers --cookie "$TMP/cookies" "$BASE/api/providers"
 grep -Eq '"connections"[[:space:]]*:' "$TMP/providers.body"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/providers.headers"
 
+# /api/tags is intentionally not implemented natively yet. It proves that an
+# authenticated public request can reach the retained upstream handler only via Rust.
+request tags --cookie "$TMP/cookies" "$BASE/api/tags"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags.headers"
+grep -Eq '^[[:space:]]*\[' "$TMP/tags.body"
+
+# The internal Next listener must reject the same API request without Rust's secret.
+if [[ -n "$UI_ORIGIN" ]]; then
+  direct_status="$(curl --silent --show-error --output "$TMP/direct.body" --write-out '%{http_code}' "$UI_ORIGIN/api/tags" || true)"
+  case "$direct_status" in
+    403|421) ;;
+    *)
+      echo "Internal UI API was reachable without Rust authentication (HTTP $direct_status)" >&2
+      cat "$TMP/direct.body" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 request dashboard --cookie "$TMP/cookies" "$BASE/dashboard"
 grep -Eqi '<!doctype html|<html' "$TMP/dashboard.body"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/dashboard.headers"
@@ -54,4 +74,4 @@ if [[ -n "$asset" ]]; then
   [[ -s "$TMP/next_asset.body" ]]
 fi
 
-printf 'Strict full-stack smoke test passed against %s\n' "$BASE"
+printf 'Rust + secured upstream compatibility smoke passed against %s\n' "$BASE"
