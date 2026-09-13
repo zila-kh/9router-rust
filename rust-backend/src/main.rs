@@ -10,6 +10,7 @@ mod gateway;
 mod legacy_proxy;
 mod management;
 mod media;
+mod metadata;
 mod protocol;
 mod providers;
 mod special;
@@ -38,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(
         %addr,
-        version = "1.0.1",
+        version = env!("CARGO_PKG_VERSION"),
         ui = %state.config.ui_origin,
         compat_api = state.config.compat_api_enabled,
         "9Router Rust backend listening"
