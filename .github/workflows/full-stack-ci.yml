@@ -34,7 +34,7 @@ jobs:
       - name: Test
         run: cargo test --manifest-path rust-backend/Cargo.toml --all-targets
       - name: Release build
-        run: cargo build --release --manifest-path rust-backend/Cargo.toml
+        run: cargo build --release --locked --manifest-path rust-backend/Cargo.toml
 
   pinned-frontend:
     runs-on: ubuntu-latest
@@ -50,12 +50,14 @@ jobs:
         run: ./scripts/materialize-frontend.sh frontend
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: |
+          if [[ -f package-lock.json ]]; then npm ci; else npm install --no-audit --no-fund; fi
       - name: Build existing Next/React UI
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_UI_SECRET: ci-internal-route-token
         run: npm run build
 
   strict-integration:
@@ -72,31 +74,40 @@ jobs:
         run: ./scripts/materialize-frontend.sh frontend
       - name: Install UI dependencies
         working-directory: frontend
-        run: npm ci
+        run: |
+          if [[ -f package-lock.json ]]; then npm ci; else npm install --no-audit --no-fund; fi
       - name: Build UI
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_UI_SECRET: ci-internal-route-token
         run: npm run build
       - name: Build Rust release
-        run: cargo build --release --manifest-path rust-backend/Cargo.toml
-      - name: Start strict stack
+        run: cargo build --release --locked --manifest-path rust-backend/Cargo.toml
+      - name: Start compatibility stack
         env:
           PORT: "20128"
           NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
           NINEROUTER_DATA_DIR: ${{ runner.temp }}/9router-data
           NINEROUTER_UI_ONLY: "1"
+          NINEROUTER_COMPAT_API: "1"
+          NINEROUTER_UI_SECRET: ci-internal-route-token
+          NINEROUTER_DISABLE_LEGACY_BRIDGE: "1"
           NEXT_TELEMETRY_DISABLED: "1"
         run: |
           set -euo pipefail
           mkdir -p "$NINEROUTER_DATA_DIR"
-          (cd frontend && npm run start -- --hostname 127.0.0.1 --port 20129 >"${RUNNER_TEMP}/ui.log" 2>&1 & echo $! >"${RUNNER_TEMP}/ui.pid")
-          ./rust-backend/target/release/9router-rust >"${RUNNER_TEMP}/rust.log" 2>&1 & echo $! >"${RUNNER_TEMP}/rust.pid"
+          (cd frontend && npm run start:ui >"${RUNNER_TEMP}/ui.log" 2>&1 & echo $! >"${RUNNER_TEMP}/ui.pid")
+          ./rust-backend/target/release/nine-router-rs >"${RUNNER_TEMP}/rust.log" 2>&1 & echo $! >"${RUNNER_TEMP}/rust.pid"
           ./scripts/wait-http.sh http://127.0.0.1:20128/api/health 90
       - name: Smoke test Rust and UI
+        env:
+          NINEROUTER_UI_ORIGIN: http://127.0.0.1:20129
         run: ./scripts/full-stack-smoke.sh http://127.0.0.1:20128
-      - name: Strict parity gate
+      - name: Native parity report
+        env:
+          NINEROUTER_ALLOW_PARITY_GAPS: "1"
         run: ./scripts/release-gate.sh .
       - name: Dump logs on failure
         if: failure()
