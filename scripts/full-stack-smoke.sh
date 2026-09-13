@@ -79,7 +79,8 @@ request providers --cookie "$TMP/cookies" "$BASE/api/providers"
 grep -Eq '"connections"[[:space:]]*:' "$TMP/providers.body"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/providers.headers"
 
-# /api/tags is upstream-only and protected by the same dashboard gate as upstream.
+# /api/tags follows Ollama's {"models":[...]} response contract and is protected
+# by the same dashboard gate as other management APIs.
 unauth_tags_status="$(curl --silent --show-error \
   --output "$TMP/tags-unauth.body" \
   --write-out '%{http_code}' \
@@ -87,14 +88,14 @@ unauth_tags_status="$(curl --silent --show-error \
 [[ "$unauth_tags_status" == 401 ]]
 request tags --cookie "$TMP/cookies" "$BASE/api/tags"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags.headers"
-grep -Eq '^[[:space:]]*\[' "$TMP/tags.body"
+grep -Eq '"models"[[:space:]]*:[[:space:]]*\[' "$TMP/tags.body"
 
 # CLI clients use the same machine-id/secret-derived token as upstream and do not
 # need a dashboard cookie for protected management APIs.
 if [[ -n "$CLI_TOKEN" ]]; then
   request tags_cli --header "x-9r-cli-token: $CLI_TOKEN" "$BASE/api/tags"
   grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/tags_cli.headers"
-  grep -Eq '^[[:space:]]*\[' "$TMP/tags_cli.body"
+  grep -Eq '"models"[[:space:]]*:[[:space:]]*\[' "$TMP/tags_cli.body"
 fi
 
 # Non-native public APIs must use upstream's current contracts instead of being
