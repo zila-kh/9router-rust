@@ -11,7 +11,8 @@
 - Added direct-loopback, browser-origin, and forwarded-peer checks for host-control operations so a reverse proxy hop cannot be mistaken for a local request.
 - Added a shared `NINEROUTER_UI_SECRET` guard; direct requests to internal Next backend paths remain blocked.
 - Added `x-9router-runtime: upstream-compat` for delegated responses.
-- Kept `/v1`, `/v1beta`, `/responses`, and `/codex` Rust-owned.
+- Kept core `/v1` chat, model, embeddings, audio, image, Responses, Claude, Gemini, and Codex paths Rust-owned.
+- Restored upstream 0.5.75 video generation/status/download/cancel, search, and web-fetch endpoints through a selective secured compatibility path for `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**`.
 - Added upstream-compatible `/api/health` JSON, CORS headers, and `OPTIONS` behavior.
 - Updated strict `/api/init` and `/api/version` metadata to report the pinned upstream `0.5.75` snapshot.
 - Added a dedicated no-redirect proxy client so OIDC, SAML, login, and other browser redirects are returned intact with the original public host and protocol.
@@ -20,7 +21,7 @@
 - Updated development and production launchers to generate the shared token and enable compatibility mode; strict mode explicitly disables all fallback.
 - Repaired frontend materialization and CI when the upstream checkout has no `package-lock.json`.
 - Declared and consistently launched the release binary as `9router-rust`.
-- Added full-stack coverage for exact upstream management responses, protected and upstream-only endpoints, browser redirect passthrough, shared state, and direct internal API isolation.
+- Added full-stack coverage for exact upstream management responses, protected and upstream-only endpoints, upstream CLI-token access, browser redirect passthrough, shared state, direct internal API isolation, and the upstream video route.
 - Replaced the racy Rust-format auto-commit workflow with deterministic formatting, build, test, and Clippy verification.
 
 Native parity is still tracked independently. Compatibility coverage is not counted as a Rust port in `rust-backend/parity/routes.json`.
