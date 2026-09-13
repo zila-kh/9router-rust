@@ -9,21 +9,38 @@ UI_HOST="127.0.0.1"
 RUST_BIN="${NINEROUTER_RUST_BIN:-$ROOT/rust-backend/target/release/9router-rust}"
 
 export NINEROUTER_UI_ONLY=1
+export NINEROUTER_COMPAT_API=0
 export NINEROUTER_UI_ORIGIN="http://${UI_HOST}:${UI_PORT}"
 export NINEROUTER_DISABLE_LEGACY_BRIDGE=1
 export PORT="$PUBLIC_PORT"
-unset NINEROUTER_LEGACY_BACKEND_ORIGIN LEGACY_BACKEND_ORIGIN
+unset NINEROUTER_LEGACY_BACKEND_ORIGIN LEGACY_BACKEND_ORIGIN NINEROUTER_UI_SECRET
 
-if [[ ! -d "$FRONTEND_DIR" ]]; then
-  bash "$ROOT/scripts/materialize-frontend.sh" "$FRONTEND_DIR"
+if [[ -n "${NINEROUTER_DATA_DIR:-}" && -n "${DATA_DIR:-}" && "$NINEROUTER_DATA_DIR" != "$DATA_DIR" ]]; then
+  echo 'error: NINEROUTER_DATA_DIR and DATA_DIR must point to the same directory' >&2
+  exit 2
+fi
+if [[ -n "${NINEROUTER_DATA_DIR:-}" ]]; then
+  export DATA_DIR="$NINEROUTER_DATA_DIR"
+elif [[ -n "${DATA_DIR:-}" ]]; then
+  export NINEROUTER_DATA_DIR="$DATA_DIR"
 fi
 
+bash "$ROOT/scripts/materialize-frontend.sh" "$FRONTEND_DIR"
+
 if [[ ! -d "$FRONTEND_DIR/.next" ]]; then
-  (cd "$FRONTEND_DIR" && npm ci && NEXT_TELEMETRY_DISABLED=1 NINEROUTER_UI_ONLY=1 npm run build)
+  (
+    cd "$FRONTEND_DIR"
+    if [[ -f package-lock.json ]]; then
+      npm ci
+    else
+      npm install --no-audit --no-fund
+    fi
+    NEXT_TELEMETRY_DISABLED=1 NINEROUTER_UI_ONLY=1 npm run build
+  )
 fi
 
 if [[ ! -x "$RUST_BIN" ]]; then
-  cargo build --release --manifest-path "$ROOT/rust-backend/Cargo.toml"
+  cargo build --release --locked --manifest-path "$ROOT/rust-backend/Cargo.toml"
 fi
 
 TMP="${TMPDIR:-/tmp}/9router-rust-$PUBLIC_PORT"
@@ -41,7 +58,7 @@ trap cleanup EXIT INT TERM
 
 (
   cd "$FRONTEND_DIR"
-  exec npx next start --hostname "$UI_HOST" --port "$UI_PORT"
+  exec npm run start:ui
 ) >"$TMP/frontend.log" 2>&1 &
 UI_PID=$!
 

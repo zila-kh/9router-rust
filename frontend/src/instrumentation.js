@@ -1,6 +1,18 @@
 export async function register() {
-  if (process.env.NINEROUTER_UI_ONLY === "1") return;
+  if (
+    process.env.NINEROUTER_UI_ONLY === "1" &&
+    process.env.NINEROUTER_COMPAT_API !== "1"
+  ) {
+    return;
+  }
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // The vendored layout intentionally omits backend side-effect imports. Bring
+    // them back only when Rust has enabled the secured compatibility API.
+    if (process.env.NINEROUTER_COMPAT_API === "1") {
+      await import("@/lib/network/initOutboundProxy");
+      await import("@/shared/services/bootstrap");
+    }
+
     const { initConsoleLogCapture } = await import("@/lib/consoleLogBuffer");
     initConsoleLogCapture();
 

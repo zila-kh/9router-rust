@@ -22,7 +22,7 @@ cleanup(){
 }
 trap cleanup EXIT INT TERM
 
-test -x rust-backend/target/debug/nine-router-rs
+test -x rust-backend/target/debug/9router-rust
 test -f frontend/.next/BUILD_ID
 
 python3 - <<'PY' >"$MOCK_LOG" 2>&1 &
@@ -98,7 +98,7 @@ PORT=20128 \
 NINEROUTER_UI_ORIGIN=http://127.0.0.1:20129 \
 NINEROUTER_DATA_DIR="$TMP/data" \
 NINEROUTER_DB_PATH="$TMP/data/db/data.sqlite" \
-rust-backend/target/debug/nine-router-rs >"$RUST_LOG" 2>&1 &
+rust-backend/target/debug/9router-rust >"$RUST_LOG" 2>&1 &
 
 for _ in {1..120}; do
   curl -fsS http://127.0.0.1:20128/api/health >/dev/null 2>&1 && break

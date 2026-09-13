@@ -1,10 +1,10 @@
 use crate::{error::AppError, state::AppState};
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{header, HeaderMap, HeaderValue};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     net::{IpAddr, SocketAddr},
@@ -13,6 +13,21 @@ use std::{
 use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
+
+const CLI_TOKEN_HEADER: &str = "x-9r-cli-token";
+const CLI_TOKEN_SALT: &str = "9r-cli-auth";
+const FORWARDED_PEER_HEADERS: &[&str] = &[
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "cf-connecting-ip",
+    "true-client-ip",
+    "x-client-ip",
+    "x-cluster-client-ip",
+    "x-9r-via-proxy",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionClaims {
@@ -40,9 +55,11 @@ pub fn extract_api_key(headers: &HeaderMap, query_key: Option<&str>) -> Option<S
 pub fn is_loopback(peer: SocketAddr) -> bool {
     is_loopback_ip(peer.ip())
 }
+
 pub fn is_loopback_ip(ip: IpAddr) -> bool {
     ip.is_loopback() || is_ipv4_mapped_loopback(ip)
 }
+
 fn is_ipv4_mapped_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V6(v6) => v6
@@ -51,6 +68,33 @@ fn is_ipv4_mapped_loopback(ip: IpAddr) -> bool {
             .unwrap_or(false),
         _ => false,
     }
+}
+
+pub fn is_direct_loopback_request(peer: SocketAddr, headers: &HeaderMap) -> bool {
+    if !is_loopback(peer)
+        || FORWARDED_PEER_HEADERS
+            .iter()
+            .any(|name| headers.contains_key(*name))
+    {
+        return false;
+    }
+
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Ok(origin) = url::Url::parse(origin) else {
+        return false;
+    };
+    let Some(host) = origin.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>().map(is_loopback_ip).unwrap_or(false)
 }
 
 fn jwt_secret(state: &AppState) -> Result<Vec<u8>, AppError> {
@@ -152,18 +196,63 @@ pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         })
 }
 
+pub fn has_valid_cli_token(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(supplied) = headers
+        .get(CLI_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+
+    let Some(raw_machine_id) = read_nonempty(state.config.data_dir.join("machine-id")) else {
+        return false;
+    };
+    let Some(cli_secret) = read_nonempty(state.config.data_dir.join("auth").join("cli-secret"))
+    else {
+        return false;
+    };
+    let expected = derive_cli_token(&raw_machine_id, &cli_secret);
+    expected.as_bytes().ct_eq(supplied.as_bytes()).unwrap_u8() == 1
+}
+
+fn read_nonempty(path: std::path::PathBuf) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn derive_cli_token(raw_machine_id: &str, cli_secret: &str) -> String {
+    let digest = Sha256::digest(format!(
+        "{}{}{}",
+        raw_machine_id.trim(),
+        CLI_TOKEN_SALT,
+        cli_secret.trim()
+    ));
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+pub fn has_valid_dashboard_session(state: &AppState, headers: &HeaderMap) -> bool {
+    cookie(headers, "auth_token")
+        .map(|token| verify_session_token(state, &token))
+        .unwrap_or(false)
+}
+
 pub fn dashboard_authenticated(state: &AppState, headers: &HeaderMap) -> Result<bool, AppError> {
     let settings = state.db.settings()?;
     if settings.get("requireLogin").and_then(Value::as_bool) == Some(false) {
         return Ok(true);
     }
-    Ok(cookie(headers, "auth_token")
-        .map(|t| verify_session_token(state, &t))
-        .unwrap_or(false))
+    Ok(has_valid_dashboard_session(state, headers))
 }
 
 pub fn require_dashboard(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
-    if dashboard_authenticated(state, headers)? {
+    if has_valid_cli_token(state, headers) || dashboard_authenticated(state, headers)? {
         Ok(())
     } else {
         Err(AppError::Unauthorized)
@@ -176,7 +265,7 @@ pub fn require_llm(
     peer: SocketAddr,
     query_key: Option<&str>,
 ) -> Result<(), AppError> {
-    if is_loopback(peer) {
+    if is_direct_loopback_request(peer, headers) || has_valid_cli_token(state, headers) {
         return Ok(());
     }
     let settings = state.db.settings()?;
@@ -222,4 +311,46 @@ pub fn session_cookie_header(headers: &HeaderMap, token: &str) -> HeaderValue {
         "auth_token={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400{secure}"
     ))
     .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(value: &str) -> SocketAddr {
+        value.parse().expect("valid test socket address")
+    }
+
+    #[test]
+    fn cli_token_matches_upstream_shape() {
+        let token = derive_cli_token("machine-123", "secret-456");
+        assert_eq!(token.len(), 16);
+        assert_eq!(token, derive_cli_token("machine-123", "secret-456"));
+        assert_ne!(token, derive_cli_token("machine-124", "secret-456"));
+        assert_ne!(token, derive_cli_token("machine-123", "secret-457"));
+    }
+
+    #[test]
+    fn direct_loopback_rejects_proxy_hops_and_remote_origins() {
+        let headers = HeaderMap::new();
+        assert!(is_direct_loopback_request(peer("127.0.0.1:1234"), &headers));
+        assert!(!is_direct_loopback_request(
+            peer("192.0.2.20:1234"),
+            &headers
+        ));
+
+        let mut forwarded = HeaderMap::new();
+        forwarded.insert("x-forwarded-for", HeaderValue::from_static("192.0.2.20"));
+        assert!(!is_direct_loopback_request(
+            peer("127.0.0.1:1234"),
+            &forwarded
+        ));
+
+        let mut origin = HeaderMap::new();
+        origin.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://router.example.com"),
+        );
+        assert!(!is_direct_loopback_request(peer("127.0.0.1:1234"), &origin));
+    }
 }

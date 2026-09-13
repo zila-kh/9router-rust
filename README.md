@@ -2,90 +2,122 @@
 
 [![CI](https://github.com/zila-kh/9router-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/zila-kh/9router-rust/actions/workflows/ci.yml)
 
-Backend-only Rust port overlay for the existing 9Router Next/React UI.
+Rust owns the public 9Router listener while the existing Next/React application supplies the dashboard. In normal compatibility mode, Rust keeps authentication and the public security boundary while the pinned upstream API handlers preserve exact dashboard contracts until their native Rust replacements reach full parity.
 
 - Upstream repository: `decolua/9router`
-- Pinned source snapshot: `eb712ca821f0ba6bc41043fbd14494c5af5daba5` (`0.5.69`)
+- Pinned source snapshot: `17c4cc76877bd1755030a8414f8d0083f48dcccf` (`0.5.75`)
 - Port version: `1.0.1`
-- UI: existing Next/React UI, unchanged except two UI-only guards applied by the installer
 - Public listener: Rust (`:20128` by default)
-- Internal UI listener: Next (`127.0.0.1:20129` in strict mode)
-- Existing SQLite DB: `~/.9router/db/data.sqlite`
+- Internal Next listener: `127.0.0.1:20129`
+- Existing SQLite DB on Linux/macOS: `~/.9router/db/data.sqlite`
+- Existing SQLite DB on Windows: `%APPDATA%\9router\db\data.sqlite`
 
-## One-command bootstrap
+## Run the usable compatibility stack
 
-If you only extracted this port package, create the complete pinned 9Router test checkout with:
-
-```bash
-./scripts/bootstrap.sh 9router-rust-1.0.1
-cd 9router-rust-1.0.1
-./scripts/test-port.sh .
-```
-
-## Install into a 9Router checkout
-
-```bash
-git clone https://github.com/decolua/9router.git
-cd 9router
-git checkout eb712ca821f0ba6bc41043fbd14494c5af5daba5
-
-# From the extracted port package:
-/path/to/9router-rust-port-1.0.1/scripts/install-overlay.sh .
-```
-
-The installer:
-
-1. copies `rust-backend/` and test/run scripts into the checkout;
-2. patches Next middleware/instrumentation so `NINEROUTER_UI_ONLY=1` does not run backend auth/catalog jobs inside Next;
-3. exports the upstream provider/model/OAuth/media registry into static JSON consumed by Rust;
-4. runs a static Rust delimiter audit.
-
-The Rust crate intentionally refuses to build if the provider catalog was not exported first.
-
-## Build and test
-
-```bash
-cargo build --release --manifest-path rust-backend/Cargo.toml
-./scripts/test-port.sh .
-```
-
-`test-port.sh` runs `cargo fmt --check`, `cargo check`, `cargo test`, and prints the parity audit. It does **not** fail just because migration gaps are still listed.
-
-For a 100%-parity release gate:
-
-```bash
-./scripts/release-gate.sh .
-```
-
-That command fails until every upstream route and every declared semantic gap is native Rust.
-
-## Run
-
-Strict Rust backend (best for finding missing functionality):
+Development:
 
 ```bash
 ./scripts/run-dev.sh .
 ```
 
-Hybrid parity mode (best for using the unchanged UI while testing the migration):
+Production build:
 
 ```bash
-./scripts/run-hybrid.sh .
+./scripts/run-prod.sh .
 ```
 
-In hybrid mode Rust owns the public port and only unknown/unported backend requests fall through to the frozen JS server. Inspect the response header:
+Both commands:
 
-- `x-9router-runtime: rust` — native Rust backend
-- `x-9router-runtime: legacy-bridge` — still served by legacy JS
+1. materialize the exact pinned upstream source if the vendored frontend is stale;
+2. keep upstream `src/app/api` handlers available only on the loopback Next listener;
+3. generate one shared internal secret for Rust and Next;
+4. start Rust as the only public listener;
+5. keep login, session enforcement, health, and parity reporting native in Rust;
+6. send other dashboard management APIs through the pinned upstream handlers for exact response shapes and current feature coverage;
+7. selectively map the still-unported `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**` families to their pinned upstream handlers;
+8. initialize upstream background/runtime services only in secured compatibility mode;
+9. make Rust and Next use the same data directory and SQLite database.
 
-The current parity manifest is also available from authenticated requests to:
+Inspect `x-9router-runtime` on API responses:
+
+- `rust` — handled natively by the Rust backend;
+- `upstream-compat` — authenticated or admitted by Rust, then handled by the pinned upstream API route;
+- `legacy-bridge` — old full-backend bridge mode, only when explicitly configured.
+
+The internal Next listener rejects `/api`, `/v1`, `/v1beta`, `/responses`, and `/codex` requests unless Rust provides the matching `x-9router-ui-secret` value. The launcher binds Next to loopback and sets `NINEROUTER_DISABLE_LEGACY_BRIDGE=1`.
+
+Rust mirrors upstream route security classes before delegation. Normal dashboard APIs require a dashboard session or the upstream-compatible `x-9r-cli-token`; update, shutdown, and database operations require a valid session or CLI token even when dashboard login is disabled. Host-control operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom control require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse proxy hop from being mistaken for a local user.
+
+Public model APIs keep Rust authentication at the outer boundary. Core chat, model-list, embeddings, audio, image, Responses, Claude, Gemini, and Codex paths remain native. Compatibility mode delegates only the currently unported video generation/status/download/cancel, search, and web-fetch paths. These responses are visibly marked `x-9router-runtime: upstream-compat` and are not counted as native parity.
+
+The proxy does not follow HTTP redirects. OIDC, SAML, login, and other redirect responses are returned to the browser with the original public host and protocol preserved.
+
+## Run strict native-only mode
+
+Use strict mode to find remaining Rust parity gaps:
+
+```bash
+./scripts/run-full-stack-strict.sh
+```
+
+Strict mode sets `NINEROUTER_COMPAT_API=0` and disables the legacy bridge. Unported management and public model endpoints return a Rust 404/405/501 rather than reaching Next, and the retained upstream runtime bootstrap remains disabled.
+
+## Configuration
+
+The normal launchers set these automatically:
+
+```text
+NINEROUTER_UI_ONLY=1
+NINEROUTER_COMPAT_API=1
+NINEROUTER_UI_SECRET=<random shared token>
+NINEROUTER_UI_ORIGIN=http://127.0.0.1:20129
+NINEROUTER_DISABLE_LEGACY_BRIDGE=1
+```
+
+`NINEROUTER_DATA_DIR` and upstream `DATA_DIR` are aliases. The launchers mirror either one into the other and reject conflicting values so both processes use the same database and runtime files. In compatibility mode, do not point `NINEROUTER_DB_PATH` at a database outside `${DATA_DIR}/db/data.sqlite`, because the upstream process cannot follow that Rust-only override.
+
+When starting the two processes manually, `NINEROUTER_UI_SECRET` must be identical in both environments. Never expose the internal Next port publicly.
+
+## Build and test
+
+```bash
+cargo fmt --all --manifest-path rust-backend/Cargo.toml -- --check
+cargo check --manifest-path rust-backend/Cargo.toml --all-targets
+cargo test --manifest-path rust-backend/Cargo.toml --all-targets
+cargo clippy --manifest-path rust-backend/Cargo.toml --all-targets -- -D warnings
+```
+
+Full-stack checks:
+
+```bash
+./scripts/full-stack-smoke.sh http://127.0.0.1:20128
+./scripts/full-stack-smoke-v2.sh http://127.0.0.1:20128
+```
+
+The first smoke test verifies Rust-owned login and health, exact upstream dashboard API routing, protected and upstream-only endpoints, upstream CLI-token access, browser redirect passthrough, the upstream 0.5.75 video route, and rejection of direct internal API access. The second verifies strict native-only behavior.
+
+## Update the pinned upstream source
+
+The `Vendor pinned 9Router frontend` workflow exports the provider catalog and route inventory, vendors the frontend plus compatibility API handlers, applies the loopback security guard and compatibility bootstrap, builds the result, and commits the verified source back to the branch that triggered it.
+
+The current native manifest is available from an authenticated request to:
 
 ```text
 GET /api/rust/parity
 ```
 
-## Important status
+Run the audit locally with:
 
-This package is a substantial, testable backend port, but it is **not truthfully 100% strict-Rust parity yet**. The release gate is intentionally red while the items in `rust-backend/parity/routes.json` remain. See `docs/PARITY.md`.
+```bash
+node scripts/audit-parity.mjs
+```
 
-The build environment used to create this package did not contain Cargo/rustc and had no package-download network access, so no `cargo check` result is claimed here. JavaScript and shell support scripts were syntax-checked and Rust source received a delimiter/static audit; your first `./scripts/test-port.sh .` run is the authoritative compile/test pass.
+For a true 100%-native release gate:
+
+```bash
+./scripts/release-gate.sh .
+```
+
+## Parity status
+
+Compatibility mode restores broad dashboard and endpoint functionality, but it does not mean every behavior has been rewritten in Rust. `rust-backend/parity/routes.json` and `docs/PARITY.md` remain the source of truth for native coverage. The 100%-native release gate is expected to fail until all listed route and semantic gaps are removed.

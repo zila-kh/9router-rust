@@ -12,5 +12,5 @@ cargo test --locked --all-targets --manifest-path rust-backend/Cargo.toml
 cargo build --locked --manifest-path rust-backend/Cargo.toml
 npm --prefix frontend ci
 NINEROUTER_UI_ONLY=1 npm --prefix frontend run build
-./scripts/smoke-e2e.sh .
+bash ./scripts/smoke-e2e.sh .
 NINEROUTER_ALLOW_PARITY_GAPS=1 node ./scripts/audit-parity.mjs
