@@ -75,7 +75,7 @@ fn seed_initial_password(db: &Db) -> anyhow::Result<()> {
         Ok(value) if value.trim().is_empty() => bail!("INITIAL_PASSWORD must not be empty"),
         Ok(value) => value,
         Err(env::VarError::NotPresent) => return Ok(()),
-        Err(error) => return Err(error).map_err(Into::into),
+        Err(error) => return Err(error.into()),
     };
     let settings = db.settings()?;
     let has_stored_password = settings
