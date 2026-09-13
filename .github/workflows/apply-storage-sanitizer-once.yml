@@ -1,0 +1,140 @@
+name: Validate storage and sanitizer release fixes
+
+on:
+  push:
+    branches: [fix/route-policy-second-pass-2026-09]
+    paths: [.github/workflows/apply-storage-sanitizer-once.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply launcher, sanitizer and documentation changes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          def edit(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              assert text.count(old) == 1, (path, old[:80], text.count(old))
+              p.write_text(text.replace(old, new, 1))
+
+          old = '''if [[ -n "${NINEROUTER_DATA_DIR:-}" && -n "${DATA_DIR:-}" && "$NINEROUTER_DATA_DIR" != "$DATA_DIR" ]]; then
+            echo 'error: NINEROUTER_DATA_DIR and DATA_DIR must point to the same directory' >&2
+            exit 2
+          fi
+          if [[ -n "${NINEROUTER_DATA_DIR:-}" ]]; then
+            export DATA_DIR="$NINEROUTER_DATA_DIR"
+          elif [[ -n "${DATA_DIR:-}" ]]; then
+            export NINEROUTER_DATA_DIR="$DATA_DIR"
+          fi'''
+          for name in ('run-dev.sh', 'run-prod.sh', 'run-full-stack-strict.sh'):
+              helper = '"$ROOT/scripts/normalize-storage-paths.py"' if name == 'run-full-stack-strict.sh' else 'scripts/normalize-storage-paths.py'
+              new = '# Normalize once before Rust and Next start from different working directories.\n'
+              new += 'storage_exports="$(python3 ' + helper + ')"\neval "$storage_exports"\nunset storage_exports'
+              edit('scripts/' + name, old, new)
+
+          edit('scripts/run-full-stack-strict.sh', 'for command in cargo npm node curl; do', 'for command in cargo npm node curl python3; do')
+          edit('scripts/run-full-stack-strict.sh', 'export NINEROUTER_UI_ONLY=1', '''if [[ ! "$PUBLIC_PORT" =~ ^[0-9]+$ ]] || (( 10#$PUBLIC_PORT < 1 || 10#$PUBLIC_PORT > 65535 )); then
+            echo "error: invalid PORT: $PUBLIC_PORT" >&2
+            exit 2
+          fi
+          if (( 10#$PUBLIC_PORT == 10#$UI_PORT )); then
+            echo 'error: PORT and NINEROUTER_UI_PORT must be different' >&2
+            exit 2
+          fi
+
+          export NINEROUTER_UI_ONLY=1''')
+          edit('scripts/test-port.sh', 'node ./scripts/test-release-boundaries.mjs', 'node ./scripts/test-release-boundaries.mjs\npython3 ./scripts/test-storage-paths.py')
+
+          p = Path('frontend/package.json')
+          package = json.loads(p.read_text())
+          package.setdefault('overrides', {})['dompurify'] = '3.4.13'
+          p.write_text(json.dumps(package, indent=2, ensure_ascii=False) + '\n')
+          old = "data.setdefault('dependencies', {})['monaco-editor'] = '^0.56.0'"
+          edit('scripts/materialize-frontend.sh', old, old + "\n# Monaco pins an older sanitizer; retain the reviewed patch on rematerialization.\ndata.setdefault('overrides', {})['dompurify'] = '3.4.13'")
+          edit('scripts/test-frontend-materialization.sh', 'NODE\n\ngrep -q', '''if (pkg.overrides?.dompurify !== "3.4.13") {
+            throw new Error("materialization lost the patched DOMPurify override");
+          }
+          NODE
+
+          grep -q''')
+          edit('README.md', 'materialize the exact pinned upstream source if the vendored frontend is stale;', 'materialize the exact pinned upstream source when absent, or restore reviewed overlays in a recognized snapshot (unknown or different snapshots must be backed up and moved first);')
+          edit('README.md', '`NINEROUTER_DATA_DIR` and upstream `DATA_DIR` are aliases. The launchers mirror either one into the other and reject conflicting values so both processes use the same database and runtime files. In compatibility mode, do not point `NINEROUTER_DB_PATH` at a database outside `${DATA_DIR}/db/data.sqlite`, because the upstream process cannot follow that Rust-only override.', '`NINEROUTER_DATA_DIR` and upstream `DATA_DIR` are aliases. Before starting either process, all three launchers resolve them to the same absolute path, accept equivalent paths, and reject conflicting or empty values. Relative paths are resolved from the launcher working directory (the repository root for run-dev/run-prod). In compatibility mode, the launchers reject a `NINEROUTER_DB_PATH` that does not match `${DATA_DIR}/db/data.sqlite`, because the upstream process cannot follow that Rust-only override. Strict mode retains custom database-path support. Boolean compatibility settings are normalized to `1` or `0` for both runtimes.')
+          PY
+      - name: Run storage, permission and materialization regressions
+        run: |
+          python3 scripts/test-storage-paths.py
+          node scripts/test-release-boundaries.mjs
+          bash scripts/test-frontend-materialization.sh
+          bash -n scripts/run-dev.sh scripts/run-prod.sh scripts/run-full-stack-strict.sh scripts/materialize-frontend.sh scripts/test-port.sh
+      - name: Refresh only the sanitizer lock entry
+        working-directory: frontend
+        run: |
+          cp package-lock.json /tmp/package-lock-before.json
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          node - <<'JS'
+          const assert = require('node:assert/strict');
+          const before = require('/tmp/package-lock-before.json').packages;
+          const after = require('./package-lock.json').packages;
+          const paths = new Set([...Object.keys(before), ...Object.keys(after)]);
+          const changed = [...paths].filter(path => before[path]?.version !== after[path]?.version);
+          assert.deepEqual(changed, ['node_modules/dompurify']);
+          assert.equal(after['node_modules/dompurify'].version, '3.4.13');
+          assert.equal(after['node_modules/monaco-editor'].version, '0.56.0');
+          console.log('Only DOMPurify changed: 3.4.8 -> 3.4.13; Monaco remains 0.56.0');
+          JS
+      - name: Install and build the patched frontend
+        working-directory: frontend
+        env:
+          NINEROUTER_UI_ONLY: '1'
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          npm ci
+          npm run build
+      - name: Verify production dependency advisory report
+        run: |
+          npm --prefix frontend audit --omit=dev --json > /tmp/npm-production-audit-after.json || test "$?" -eq 1
+          node - <<'JS'
+          const assert = require('node:assert/strict');
+          const report = require('/tmp/npm-production-audit-after.json');
+          assert.equal(report.error, undefined);
+          assert.equal(report.vulnerabilities?.dompurify, undefined);
+          assert.equal(report.metadata.vulnerabilities.high, 0);
+          assert.equal(report.metadata.vulnerabilities.critical, 0);
+          console.log('Production audit:', JSON.stringify(report.metadata.vulnerabilities));
+          JS
+          git diff --check
+          git diff > /tmp/storage-sanitizer-release.patch
+      - name: Save verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-sanitizer-release-evidence
+          path: |
+            /tmp/npm-production-audit-after.json
+            /tmp/storage-sanitizer-release.patch
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Commit validated changes and remove helper
+        run: |
+          rm .github/workflows/apply-storage-sanitizer-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/run-dev.sh scripts/run-prod.sh scripts/run-full-stack-strict.sh scripts/test-port.sh scripts/materialize-frontend.sh scripts/test-frontend-materialization.sh frontend/package.json frontend/package-lock.json README.md .github/workflows/apply-storage-sanitizer-once.yml
+          git commit -m 'fix: share absolute storage paths and patch the frontend sanitizer'
+          git push origin HEAD:fix/route-policy-second-pass-2026-09
