@@ -98,6 +98,27 @@ remote_proxy_status="$(curl --silent --show-error \
 [[ "$remote_proxy_status" == 403 ]]
 grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/remote-proxy.headers"
 
+# Alternate spellings must be checked by Rust before reaching Next's dynamic routes.
+for endpoint in \
+  /api/oauth/codex/%73tart-proxy \
+  /%61pi/oauth/xiaomi%2dmimo/exchange \
+  /api/mcp \
+  /api/tunnel/; do
+  status="$(curl --path-as-is --silent --show-error \
+    --cookie "$TMP/cookies" --header 'x-forwarded-for: 198.51.100.23' \
+    --dump-header "$TMP/encoded-local.headers" --output "$TMP/encoded-local.body" \
+    --write-out '%{http_code}' "$BASE$endpoint")"
+  [[ "$status" == 403 ]]
+  grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/encoded-local.headers"
+done
+for endpoint in /safe/../api/settings /safe/%2e%2e/api/settings /api//settings /api/%GG; do
+  status="$(curl --path-as-is --silent --show-error \
+    --cookie "$TMP/cookies" --dump-header "$TMP/ambiguous.headers" \
+    --output "$TMP/ambiguous.body" --write-out '%{http_code}' "$BASE$endpoint")"
+  [[ "$status" == 400 ]]
+  grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/ambiguous.headers"
+done
+
 # Remote-safe, user-supplied token import instructions remain available to an
 # authenticated remote dashboard, proving the local-only matcher is not broad.
 request cursor_import_remote \

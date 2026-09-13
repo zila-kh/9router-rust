@@ -10,6 +10,18 @@ case "$DEST" in
   /|""|.) echo "Refusing unsafe frontend destination: $DEST" >&2; exit 2 ;;
 esac
 
+# Resolve aliases before touching the filesystem; '.', '..', and symlinks
+# must never turn a frontend refresh into replacement of a parent directory.
+python3 - "$DEST" "$ROOT" <<'PATH_CHECK'
+from pathlib import Path
+import sys
+dest = Path(sys.argv[1])
+resolved = dest.resolve()
+protected = [Path(sys.argv[2]).resolve(), Path.cwd().resolve()]
+if dest.is_symlink() or any(resolved == p or resolved in p.parents for p in protected):
+    raise SystemExit(f"Refusing unsafe frontend destination: {dest}")
+PATH_CHECK
+
 keep_existing=0
 if [[ -d "$DEST/.git" ]]; then
   current="$(git -C "$DEST" rev-parse HEAD 2>/dev/null || true)"
@@ -25,7 +37,9 @@ elif [[ -f "$DEST/package.json" && -f "$DEST/.upstream-commit" && -d "$DEST/src/
 fi
 
 if [[ "$keep_existing" != 1 && -e "$DEST" ]]; then
-  rm -rf "$DEST"
+  echo "Refusing to replace an unrecognized or different frontend snapshot: $DEST" >&2
+  echo 'Choose a new destination or back up and move the existing directory first.' >&2
+  exit 2
 fi
 
 if [[ ! -d "$DEST" ]]; then

@@ -61,6 +61,11 @@ pub async fn handle(
     let mut incoming: Value = serde_json::from_slice(&bytes)
         .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))?;
 
+    if !incoming.is_object() {
+        return Err(AppError::BadRequest(
+            "JSON request body must be an object".into(),
+        ));
+    }
     if caller == Format::Gemini && incoming.get("model").is_none() {
         if let Some(model) = gemini_model_from_path(&path) {
             incoming["model"] = Value::String(model);

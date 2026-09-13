@@ -60,8 +60,18 @@ pub fn router(state: AppState) -> Router {
 async fn entry(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request<Body>,
+    mut req: Request<Body>,
 ) -> Response<Body> {
+    match crate::request_path::canonical_uri(req.uri()) {
+        Ok(uri) => *req.uri_mut() = uri,
+        Err(error) => {
+            let mut response = error.into_response();
+            response
+                .headers_mut()
+                .insert("x-9router-runtime", HeaderValue::from_static("rust"));
+            return response;
+        }
+    }
     let path = req.uri().path().to_string();
     let is_compat_media = state.config.compat_api_enabled && compat_media::is_path(&path);
     let is_backend = is_compat_media
@@ -242,7 +252,7 @@ fn is_local_oauth_action(path: &str) -> bool {
 fn is_local_only_path(path: &str) -> bool {
     LOCAL_ONLY_PREFIXES
         .iter()
-        .any(|prefix| path.starts_with(prefix))
+        .any(|prefix| path == prefix.trim_end_matches('/') || path.starts_with(prefix))
         || is_local_oauth_action(path)
 }
 
@@ -394,5 +404,125 @@ mod tests {
         assert_eq!(init.status(), StatusCode::OK);
         assert_eq!(version.status(), StatusCode::OK);
         assert!(strict_metadata_response("/api/providers").is_none());
+    }
+}
+
+#[cfg(test)]
+mod release_review_tests {
+    use super::*;
+    use crate::{config::Config, db::Db};
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    fn test_state(compat: bool) -> (tempfile::TempDir, AppState) {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.sqlite");
+        let db = Db::open(&db_path).unwrap();
+        db.update_settings(json!({"requireLogin":false,"requireApiKey":false}))
+            .unwrap();
+        let config = Config {
+            listen: "127.0.0.1:20128".parse().unwrap(),
+            ui_origin: "http://127.0.0.1:1".into(),
+            data_dir: temp.path().to_path_buf(),
+            db_path,
+            upstream_timeout_secs: 1,
+            ui_only_header_secret: "test-internal-secret".into(),
+            legacy_backend_origin: None,
+            compat_api_enabled: compat,
+        };
+        (temp, AppState::new(config, db).unwrap())
+    }
+
+    fn request(path: &str, body: &str, remote: bool) -> Request<Body> {
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let peer: SocketAddr = if remote {
+            "203.0.113.7:1234"
+        } else {
+            "127.0.0.1:1234"
+        }
+        .parse()
+        .unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer));
+        req
+    }
+
+    #[tokio::test]
+    async fn encoded_local_actions_never_reach_compatibility_proxy() {
+        let (_temp, state) = test_state(true);
+        for path in [
+            "/api/oauth/codex/%73tart-proxy",
+            "/%61pi/oauth/xiaomi%2dmimo/exchange",
+            "/api/oauth/codex/%70oll-status",
+            "/api/mcp",
+            "/api/mcp/",
+            "/api/tunnel",
+        ] {
+            let response = router(state.clone())
+                .oneshot(request(path, "{}", true))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+            assert_eq!(response.headers()["x-9router-runtime"], "rust");
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiguous_paths_are_rejected_before_ui_forwarding() {
+        let (_temp, state) = test_state(true);
+        for path in [
+            "/safe/../api/settings",
+            "/safe/%2e%2e/api/settings",
+            "/api//settings",
+            "/api/%5Csettings",
+            "/api/%GG",
+        ] {
+            let response = router(state.clone())
+                .oneshot(request(path, "{}", true))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_json_types_return_400_without_panicking() {
+        let (_temp, state) = test_state(false);
+        for path in [
+            "/v1beta/models/test:generateContent",
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses",
+        ] {
+            for body in ["null", "[]", "123", "true", "\"string\"", "{"] {
+                let response = router(state.clone())
+                    .oneshot(request(path, body, false))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}: {body}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_locale_route_works_through_the_real_router_before_login() {
+        let (_temp, state) = test_state(false);
+        state
+            .db
+            .update_settings(json!({"requireLogin":true}))
+            .unwrap();
+        let response = router(state)
+            .oneshot(request("/api/locale/", r#"{"locale":"km"}"#, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .starts_with("locale=km;"));
     }
 }

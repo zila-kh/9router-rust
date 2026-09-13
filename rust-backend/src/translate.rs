@@ -32,6 +32,11 @@ pub fn caller_for_path(path: &str) -> Format {
 }
 
 pub fn normalize_request(body: Value, caller: Format) -> Result<Value, AppError> {
+    if !body.is_object() {
+        return Err(AppError::BadRequest(
+            "JSON request body must be an object".into(),
+        ));
+    }
     match caller {
         Format::OpenAi => Ok(body),
         Format::Claude => claude_to_openai_request(body),

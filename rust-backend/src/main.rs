@@ -28,6 +28,7 @@ mod management;
 mod media;
 mod protocol;
 mod providers;
+mod request_path;
 mod special;
 mod state;
 mod streaming;

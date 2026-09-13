@@ -123,6 +123,22 @@ export function isLocalRequest(request) {
   return true;
 }
 
+function canonicalPath(pathname) {
+  if (typeof pathname !== "string" || !pathname.startsWith("/")) throw new Error("Invalid path");
+  if (/%(?![0-9a-f]{2})/i.test(pathname)) throw new Error("Invalid path escape");
+  const path = pathname.replace(/%([0-9a-f]{2})/gi, (escape, hex) => {
+    const byte = Number.parseInt(hex, 16);
+    if (byte < 32 || byte === 127 || byte === 92) throw new Error("Invalid path character");
+    const char = String.fromCharCode(byte);
+    return /[A-Za-z0-9._~-]/.test(char) ? char : escape.toUpperCase();
+  });
+  if (/[\\\x00-\x1f\x7f]/.test(path) || path.includes("//")
+      || path.split("/").some((part) => part === "." || part === "..")) {
+    throw new Error("Ambiguous path");
+  }
+  return path === "/" ? path : path.replace(/\/+$/, "");
+}
+
 function isPublicLlmApi(pathname) {
   return PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
@@ -196,7 +212,7 @@ async function isAuthenticated(request) {
 }
 
 function isPublicApi(request) {
-  const pathname = request.nextUrl.pathname;
+  const pathname = canonicalPath(request.nextUrl.pathname);
   const method = request.method.toUpperCase();
   if (PUBLIC_API_ROUTES.has(`${method} ${pathname}`)) return true;
   return method === "OPTIONS"
@@ -216,6 +232,7 @@ function requestHostname(request) {
 }
 
 export const __test__ = {
+  canonicalPath,
   isLocalRequest,
   isPublicLlmApi,
   isLocalOnlyPath,
@@ -227,7 +244,14 @@ export const __test__ = {
 };
 
 export async function proxy(request) {
-  const { pathname } = request.nextUrl;
+  let pathname;
+  try {
+    pathname = canonicalPath(request.nextUrl.pathname);
+  } catch {
+    return NextResponse.json({ error: "Invalid or ambiguous request path" }, {
+      status: 400, headers: { "Cache-Control": "no-store" },
+    });
+  }
 
   if (isLocalOnlyPath(pathname)) {
     if (!(await canAccessLocalOnlyRoute(request))) {
