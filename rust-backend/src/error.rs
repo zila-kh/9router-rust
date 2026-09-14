@@ -67,10 +67,9 @@ impl AppError {
             Self::NotFound(_) => true,
             // These are local/request/auth/internal failures. Trying more paid
             // models cannot fix them and can create unnecessary fan-out.
-            Self::BadRequest(_)
-            | Self::Unauthorized
-            | Self::Forbidden(_)
-            | Self::Internal(_) => false,
+            Self::BadRequest(_) | Self::Unauthorized | Self::Forbidden(_) | Self::Internal(_) => {
+                false
+            }
         }
     }
 }
