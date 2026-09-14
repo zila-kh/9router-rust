@@ -1,0 +1,245 @@
+name: Final auto-router hardening v2
+
+on:
+  push:
+    branches:
+      - feature/context-aware-auto-router
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/context-aware-auto-router
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Apply final hardening
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing source in {path}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          def sub(path, pattern, replacement):
+              p = Path(path)
+              text = p.read_text()
+              text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'expected one match in {path}, got {count}: {pattern[:100]!r}')
+              p.write_text(text)
+
+          replace(
+              'rust-backend/src/db.rs',
+              'CREATE INDEX IF NOT EXISTS idx_uh_conn ON usageHistory(connectionId);',
+              'CREATE INDEX IF NOT EXISTS idx_uh_conn ON usageHistory(connectionId);\nCREATE INDEX IF NOT EXISTS idx_uh_ts_provider_model ON usageHistory(timestamp, provider, model);'
+          )
+          replace(
+              'rust-backend/src/db.rs',
+              '    pub fn usage_stats(&self, period: &str) -> Result<Value, AppError> {',
+              '''    pub fn usage_route_stats(&self, period: &str) -> Result<Value, AppError> {
+              let cutoff = usage_cutoff(period)?;
+              self.with_conn(|db| {
+                  let sql = if cutoff.is_some() {
+                      "SELECT provider,model,COUNT(*),COALESCE(SUM(promptTokens),0),COALESCE(SUM(completionTokens),0) FROM usageHistory WHERE timestamp>=?1 GROUP BY provider,model"
+                  } else {
+                      "SELECT provider,model,COUNT(*),COALESCE(SUM(promptTokens),0),COALESCE(SUM(completionTokens),0) FROM usageHistory GROUP BY provider,model"
+                  };
+                  let mut stmt = db.prepare(sql)?;
+                  let mut rows = if let Some(cutoff) = cutoff.as_deref() {
+                      stmt.query(params![cutoff])?
+                  } else {
+                      stmt.query([])?
+                  };
+                  let mut by_model = Map::new();
+                  let mut total_prompt = 0i64;
+                  let mut total_completion = 0i64;
+                  while let Some(row) = rows.next()? {
+                      let provider: Option<String> = row.get(0)?;
+                      let model: Option<String> = row.get(1)?;
+                      let requests: i64 = row.get(2)?;
+                      let prompt: i64 = row.get(3)?;
+                      let completion: i64 = row.get(4)?;
+                      total_prompt += prompt;
+                      total_completion += completion;
+                      let provider = provider.unwrap_or_default();
+                      let model = model.unwrap_or_default();
+                      let key = if provider.is_empty() {
+                          model.clone()
+                      } else {
+                          format!("{model}|{provider}")
+                      };
+                      by_model.insert(key, json!({
+                          "requests": requests,
+                          "promptTokens": prompt,
+                          "completionTokens": completion,
+                          "rawModel": model,
+                          "provider": provider
+                      }));
+                  }
+                  Ok(json!({
+                      "totalPromptTokens": total_prompt,
+                      "totalCompletionTokens": total_completion,
+                      "byModel": by_model
+                  }))
+              })
+          }
+
+              pub fn usage_stats(&self, period: &str) -> Result<Value, AppError> {'''
+          )
+
+          replace(
+              'rust-backend/src/auto_router.rs',
+              '    let today = state.db.usage_stats("today")?;\n    let week = state.db.usage_stats("7d")?;',
+              '    let today = state.db.usage_route_stats("today")?;\n    let week = state.db.usage_route_stats("7d")?;'
+          )
+          replace(
+              'rust-backend/src/auto_router.rs',
+              'tracing::warn!(\n                model = %profile.model,\n                provider = %resolved.provider,\n                "auto-router candidate skipped: provider transport is not executable by the native Rust gateway"\n            );',
+              'tracing::debug!(\n                model = %profile.model,\n                provider = %resolved.provider,\n                "auto-router candidate skipped: provider transport is not executable by the native Rust gateway"\n            );'
+          )
+
+          sub(
+              'rust-backend/src/auto_router.rs',
+              r'(if !rust_gateway_supports_provider\(&resolved\.provider\) \{.*?continue;\s*\})\s*(// Multiple aliases/profiles)',
+              r'''\1
+
+              match state.db.provider_connections(Some(&resolved.provider), Some(true)) {
+                  Ok(connections) if !connections.is_empty() => {}
+                  Ok(_) => {
+                      tracing::debug!(
+                          model = %profile.model,
+                          provider = %resolved.provider,
+                          "auto-router candidate skipped: no active provider connection"
+                      );
+                      continue;
+                  }
+                  Err(error) => return Err(error),
+              }
+
+              \2'''
+          )
+
+          sub(
+              'rust-backend/src/auto_router.rs',
+              r'fn classify_task\(text: &str\) -> String \{.*?\n\}\n\nfn risk_score',
+              '''fn classify_task(text: &str) -> String {
+              let text = text.to_ascii_lowercase();
+              let task = if contains_any(&text, &["security", "oauth", "rbac", "authorization", "authentication", "privilege", "injection", "xss", "csrf", "secret", "cve", "tenant escape"]) {
+                  "security"
+              } else if contains_any(&text, &["architecture", "system design", "distributed", "microservice", "design the system", "schema design", "migration plan", "tradeoff"]) {
+                  "architecture"
+              } else if contains_any(&text, &["bug", "debug", "error", "crash", "panic", "failing", "failed", "traceback", "root cause", "regression"]) {
+                  "debugging"
+              } else if contains_any(&text, &["test", "spec", "coverage", "cargo test", "pytest", "jest", "playwright", "e2e"]) {
+                  "testing"
+              } else if contains_any(&text, &["frontend", "react", "next.js", "nextjs", "svelte", "vue", "css", "tailwind", "component", "responsive", "accessibility", "ui"]) {
+                  "frontend"
+              } else if contains_any(&text, &["backend", "api", "endpoint", "database", "sql", "postgres", "sqlite", "rust", "service", "controller", "repository layer", "grpc"]) {
+                  "backend"
+              } else if contains_any(&text, &["summarize", "search", "find", "locate", "scan repo", "readme", "documentation", "docs", "explain files"]) {
+                  "scout"
+              } else {
+                  "general"
+              };
+              task.to_string()
+          }
+
+          fn risk_score'''
+          )
+
+          sub(
+              'rust-backend/src/auto_router.rs',
+              r'Value::String\(text\) if is_inline_data\(text\) => 0,\s*Value::String\(text\) => text\.chars\(\)\.count\(\),',
+              '''Value::String(text) if is_inline_data(text) => 0,
+                      Value::String(text) => weighted_text_units(text),'''
+          )
+          replace(
+              'rust-backend/src/auto_router.rs',
+              '.map(|(key, value)| key.chars().count() + estimate_text_chars(value))',
+              '.map(|(key, value)| weighted_text_units(key) + estimate_text_chars(value))'
+          )
+          replace(
+              'rust-backend/src/auto_router.rs',
+              'fn estimate_structure_units(value: &Value) -> u64 {',
+              '''fn weighted_text_units(text: &str) -> usize {
+              text.chars()
+                  .map(|ch| if ch.is_ascii() { 1 } else { 4 })
+                  .sum()
+          }
+
+          fn estimate_structure_units(value: &Value) -> u64 {'''
+          )
+
+          replace(
+              'rust-backend/src/auto_router.rs',
+              '''fn contains_any(text: &str, needles: &[&str]) -> bool {
+              needles.iter().any(|needle| text.contains(needle))
+          }''',
+              '''fn contains_any(text: &str, needles: &[&str]) -> bool {
+              needles.iter().any(|needle| contains_term(text, needle))
+          }
+
+          fn contains_term(text: &str, needle: &str) -> bool {
+              let simple = needle
+                  .chars()
+                  .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.'));
+              if !simple {
+                  return text.contains(needle);
+              }
+              text.split(|ch: char| {
+                  !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.'))
+              })
+              .any(|token| token == needle)
+          }'''
+          )
+
+          replace(
+              'rust-backend/src/auto_router.rs',
+              '    #[test]\n    fn custom_antigravity_transport_is_not_considered_executable() {',
+              '''    #[test]
+              fn classifier_does_not_match_keywords_inside_other_words() {
+                  assert_eq!(classify_task("Get the latest upstream changes"), "general");
+                  assert_eq!(classify_task("Debug the Rust API failure"), "debugging");
+                  assert_eq!(classify_task("Review API implementation"), "backend");
+              }
+
+              #[test]
+              fn non_ascii_context_estimation_is_conservative() {
+                  let ascii = json!({"messages":[{"role":"user","content":"a".repeat(10_000)}]});
+                  let khmer = json!({"messages":[{"role":"user","content":"ក".repeat(10_000)}]});
+                  assert!(estimate_input_tokens(&khmer) > estimate_input_tokens(&ascii) * 3);
+              }
+
+              #[test]
+              fn custom_antigravity_transport_is_not_considered_executable() {'''
+          )
+          PY
+          cargo fmt --manifest-path rust-backend/Cargo.toml --all
+      - name: Check
+        run: cargo check --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Test
+        run: cargo test --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Clippy
+        run: cargo clippy --manifest-path rust-backend/Cargo.toml --all-targets -- -D warnings
+      - name: Commit verified final hardening
+        run: |
+          if git diff --quiet -- rust-backend/src/auto_router.rs rust-backend/src/db.rs; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add rust-backend/src/auto_router.rs rust-backend/src/db.rs
+          git commit -m 'fix: harden auto-router classification and quota hot path [skip ci]'
+          git push origin HEAD:feature/context-aware-auto-router
