@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use crate::{
-    auth,
+    auth, auto_router,
     error::AppError,
     providers,
     state::AppState,
@@ -80,7 +80,19 @@ pub async fn handle(
         .ok_or_else(|| AppError::BadRequest("model is required".into()))?
         .to_string();
 
-    let targets = combo_targets(&state, &requested)?;
+    // Existing combos always win. Auto-routing is intentionally a virtual-model
+    // feature and never changes explicit model, alias, combo, or provider behavior.
+    let existing_combo = state.db.combo_by_name(&requested)?.is_some();
+    let auto_plan = if existing_combo {
+        None
+    } else {
+        auto_router::plan_if_requested(&state, &requested, &canonical, &parts.headers)?
+    };
+    let targets = match auto_plan.as_ref() {
+        Some(plan) => plan.targets.clone(),
+        None => combo_targets(&state, &requested)?,
+    };
+
     let mut last_error: Option<AppError> = None;
     for target in targets {
         canonical["model"] = Value::String(target.clone());
@@ -94,9 +106,26 @@ pub async fn handle(
         )
         .await
         {
-            Ok(resp) => return Ok(resp),
+            Ok(mut resp) => {
+                if let Some(plan) = auto_plan.as_ref() {
+                    auto_router::record_stream_estimate_if_passthrough(
+                        &state,
+                        plan,
+                        &target,
+                        caller,
+                        wants_stream,
+                    );
+                    auto_router::remember_success(plan, &target);
+                    auto_router::annotate_response(&mut resp, plan, &target);
+                }
+                return Ok(resp);
+            }
             Err(e) => {
                 tracing::warn!(model=%target, error=%e, "model candidate failed");
+                if auto_plan.is_some() && !e.auto_route_retryable() {
+                    tracing::warn!(model=%target, "auto-router stopped fallback on non-retryable error");
+                    return Err(e);
+                }
                 last_error = Some(e);
             }
         }
@@ -326,11 +355,14 @@ async fn execute_connection(
             &format!("http_{}", status.as_u16()),
             &json!({"error":text,"durationMs":started.elapsed().as_millis()}),
         );
-        return Err(AppError::Upstream(format!(
-            "{provider} returned HTTP {}: {}",
-            status.as_u16(),
-            truncate(&text, 2048)
-        )));
+        return Err(AppError::UpstreamHttp {
+            status: status.as_u16(),
+            message: format!(
+                "{provider} returned HTTP {}: {}",
+                status.as_u16(),
+                truncate(&text, 2048)
+            ),
+        });
     }
 
     if wants_stream && caller == provider_format && upstream_stream {

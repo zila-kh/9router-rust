@@ -16,6 +16,7 @@
 
 mod app;
 mod auth;
+mod auto_router;
 mod compat_media;
 mod compat_proxy;
 mod config;

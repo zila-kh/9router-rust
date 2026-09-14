@@ -17,6 +17,8 @@ pub enum AppError {
     NotFound(String),
     #[error("upstream error: {0}")]
     Upstream(String),
+    #[error("upstream HTTP {status}: {message}")]
+    UpstreamHttp { status: u16, message: String },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -30,7 +32,9 @@ impl IntoResponse for AppError {
             Self::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             // Upstream strings may contain credential-bearing URLs or provider
             // response bodies. Never return these details to a public API user.
-            Self::Upstream(_) => (StatusCode::BAD_GATEWAY, "Upstream request failed".into()),
+            Self::Upstream(_) | Self::UpstreamHttp { .. } => {
+                (StatusCode::BAD_GATEWAY, "Upstream request failed".into())
+            }
             Self::Internal(e) => {
                 tracing::error!(error=?e, "internal error");
                 (
@@ -45,6 +49,28 @@ impl IntoResponse for AppError {
             axum::http::HeaderValue::from_static("no-store"),
         );
         response
+    }
+}
+
+impl AppError {
+    pub fn auto_route_retryable(&self) -> bool {
+        match self {
+            // Network failures and provider-specific HTTP failures are normally
+            // safe to try on another provider/model. 401/403/404/429 in
+            // particular can be account-, quota-, or model-specific and should
+            // not prevent a healthy fallback from serving the request.
+            Self::Upstream(_) => true,
+            Self::UpstreamHttp { status, .. } => *status != 400,
+            // During an auto plan the model has already resolved. A later
+            // NotFound is normally a provider/account availability race, so let
+            // the next planned candidate run.
+            Self::NotFound(_) => true,
+            // These are local/request/auth/internal failures. Trying more paid
+            // models cannot fix them and can create unnecessary fan-out.
+            Self::BadRequest(_) | Self::Unauthorized | Self::Forbidden(_) | Self::Internal(_) => {
+                false
+            }
+        }
     }
 }
 
@@ -68,6 +94,27 @@ impl From<serde_json::Error> for AppError {
 mod release_error_tests {
     use super::*;
     use axum::{body::to_bytes, http::header};
+
+    #[test]
+    fn auto_route_retries_provider_specific_failures_but_not_bad_requests() {
+        assert!(AppError::Upstream("network timeout".into()).auto_route_retryable());
+        for status in [401, 403, 404, 408, 413, 422, 429, 500, 503] {
+            assert!(AppError::UpstreamHttp {
+                status,
+                message: "provider-specific failure".into()
+            }
+            .auto_route_retryable());
+        }
+        assert!(!AppError::UpstreamHttp {
+            status: 400,
+            message: "invalid request".into()
+        }
+        .auto_route_retryable());
+        assert!(AppError::NotFound("provider account disappeared".into()).auto_route_retryable());
+        assert!(!AppError::BadRequest("bad request".into()).auto_route_retryable());
+        assert!(!AppError::Unauthorized.auto_route_retryable());
+        assert!(!AppError::Forbidden("local policy".into()).auto_route_retryable());
+    }
 
     #[tokio::test]
     async fn upstream_failures_do_not_disclose_credentials_or_internal_urls() {
