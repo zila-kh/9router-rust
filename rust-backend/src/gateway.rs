@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 
 use crate::{
     auth,
+    auto_router,
     error::AppError,
     providers,
     state::AppState,
@@ -80,7 +81,19 @@ pub async fn handle(
         .ok_or_else(|| AppError::BadRequest("model is required".into()))?
         .to_string();
 
-    let targets = combo_targets(&state, &requested)?;
+    // Existing combos always win. Auto-routing is intentionally a virtual-model
+    // feature and never changes explicit model, alias, combo, or provider behavior.
+    let existing_combo = state.db.combo_by_name(&requested)?.is_some();
+    let auto_plan = if existing_combo {
+        None
+    } else {
+        auto_router::plan_if_requested(&state, &requested, &canonical, &parts.headers)?
+    };
+    let targets = match auto_plan.as_ref() {
+        Some(plan) => plan.targets.clone(),
+        None => combo_targets(&state, &requested)?,
+    };
+
     let mut last_error: Option<AppError> = None;
     for target in targets {
         canonical["model"] = Value::String(target.clone());
@@ -94,7 +107,13 @@ pub async fn handle(
         )
         .await
         {
-            Ok(resp) => return Ok(resp),
+            Ok(mut resp) => {
+                if let Some(plan) = auto_plan.as_ref() {
+                    auto_router::remember_success(plan, &target);
+                    auto_router::annotate_response(&mut resp, plan, &target);
+                }
+                return Ok(resp);
+            }
             Err(e) => {
                 tracing::warn!(model=%target, error=%e, "model candidate failed");
                 last_error = Some(e);
