@@ -60,15 +60,15 @@ struct Candidate {
 }
 
 #[derive(Debug, Clone)]
-struct UsageSnapshot {
-    today: Value,
-    week: Value,
-}
-
-#[derive(Debug, Clone)]
 struct AffinityEntry {
     model: String,
     touched: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ModelUsage {
+    tokens: u64,
+    requests: u64,
 }
 
 static AFFINITY: Lazy<DashMap<String, AffinityEntry>> = Lazy::new(DashMap::new);
@@ -108,11 +108,11 @@ pub fn plan_if_requested(
     let task = classify_task(&latest);
     let risk = risk_score(&latest, &task);
     let complexity = complexity_score(canonical, estimated_input_tokens, &latest, &task);
-    let affinity_key = if config.cache_affinity {
-        affinity_key(canonical, headers)
-    } else {
-        None
-    };
+    let affinity_key = config
+        .cache_affinity
+        .then(|| affinity_key(canonical, headers))
+        .flatten();
+
     cleanup_affinity(config.cache_affinity_ttl_secs);
     let affinity_model = affinity_key.as_ref().and_then(|key| {
         AFFINITY.get(key).and_then(|entry| {
@@ -121,29 +121,35 @@ pub fn plan_if_requested(
         })
     });
 
-    let usage = UsageSnapshot {
-        today: state.db.usage_stats("today")?,
-        week: state.db.usage_stats("7d")?,
-    };
-    let today_total = total_tokens(&usage.today);
+    let today = state.db.usage_stats("today")?;
+    let week = state.db.usage_stats("7d")?;
+    let today_total = total_tokens(&today);
     let mut candidates = Vec::new();
 
-    for profile in config.profiles.clone() {
+    for profile in config.profiles.iter().cloned() {
         if estimated_input_tokens > profile.context_window.saturating_mul(95) / 100 {
             continue;
         }
+
         let resolved = match providers::resolve_model(state, &profile.model) {
             Ok(resolved) => resolved,
             Err(error) => {
-                tracing::debug!(model=%profile.model, error=%error, "auto-router candidate unavailable");
+                tracing::debug!(
+                    model = %profile.model,
+                    error = %error,
+                    "auto-router candidate unavailable"
+                );
                 continue;
             }
         };
 
-        let today_model = model_usage(&usage.today, &resolved.provider, &resolved.model);
-        let week_model = model_usage(&usage.week, &resolved.provider, &resolved.model);
-        if budget_exhausted(&profile, today_model.tokens, week_model.tokens, today_model.requests, week_model.requests) {
-            tracing::debug!(model=%profile.model, "auto-router candidate excluded by configured quota");
+        let today_model = model_usage(&today, &resolved.provider, &resolved.model);
+        let week_model = model_usage(&week, &resolved.provider, &resolved.model);
+        if budget_exhausted(&profile, today_model, week_model) {
+            tracing::debug!(
+                model = %profile.model,
+                "auto-router candidate excluded by configured quota"
+            );
             continue;
         }
 
@@ -156,15 +162,8 @@ pub fn plan_if_requested(
             config.large_context_tokens,
         );
         score += risk_complexity_bias(&profile, risk, complexity);
-        score += quota_bias(
-            &profile,
-            today_model.tokens,
-            week_model.tokens,
-            today_model.requests,
-            week_model.requests,
-        );
+        score += quota_bias(&profile, today_model, week_model);
         score += share_bias(&profile, today_model.tokens, today_total);
-
         if affinity_model.as_deref() == Some(profile.model.as_str()) {
             score += 35;
         }
@@ -190,21 +189,28 @@ pub fn plan_if_requested(
             .then_with(|| left.profile.name.cmp(&right.profile.name))
     });
 
-    let fallback_count = fallback_count(&config, risk, complexity).min(candidates.len());
     let targets = candidates
         .iter()
-        .take(fallback_count)
+        .take(config.max_fallbacks.min(candidates.len()))
         .map(|candidate| candidate.profile.model.clone())
         .collect::<Vec<_>>();
 
     tracing::info!(
-        router_version=ROUTER_VERSION,
+        router_version = ROUTER_VERSION,
         task,
         risk,
         complexity,
         estimated_input_tokens,
-        targets=?targets,
-        scores=?candidates.iter().map(|candidate| (&candidate.profile.model, candidate.score, &candidate.provider, &candidate.upstream_model)).collect::<Vec<_>>(),
+        targets = ?targets,
+        scores = ?candidates
+            .iter()
+            .map(|candidate| (
+                &candidate.profile.model,
+                candidate.score,
+                &candidate.provider,
+                &candidate.upstream_model,
+            ))
+            .collect::<Vec<_>>(),
         "auto-router planned request"
     );
 
@@ -231,7 +237,11 @@ pub fn remember_success(plan: &RoutePlan, model: &str) {
     }
 }
 
-pub fn annotate_response(response: &mut axum::http::Response<axum::body::Body>, plan: &RoutePlan, model: &str) {
+pub fn annotate_response(
+    response: &mut axum::http::Response<axum::body::Body>,
+    plan: &RoutePlan,
+    model: &str,
+) {
     insert_header(response, "x-9router-auto-route", "1");
     insert_header(response, "x-9router-router-version", ROUTER_VERSION);
     insert_header(response, "x-9router-selected-model", model);
@@ -267,8 +277,10 @@ fn insert_header(
 impl RouterConfig {
     fn load(state: &AppState) -> Result<Self, AppError> {
         let settings = state.db.settings()?;
-        let value = settings.get("autoRouter").cloned().unwrap_or_else(|| json!({}));
-        let enabled = value.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        let value = settings
+            .get("autoRouter")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         let aliases = string_array(value.get("aliases"))
             .filter(|aliases| !aliases.is_empty())
             .unwrap_or_else(|| vec!["auto".into(), "9router-auto".into()]);
@@ -276,12 +288,20 @@ impl RouterConfig {
             .get("profiles")
             .and_then(Value::as_array)
             .filter(|profiles| !profiles.is_empty())
-            .map(|profiles| profiles.iter().filter_map(ModelProfile::from_value).collect())
+            .map(|profiles| {
+                profiles
+                    .iter()
+                    .filter_map(ModelProfile::from_value)
+                    .collect()
+            })
             .filter(|profiles: &Vec<ModelProfile>| !profiles.is_empty())
             .unwrap_or_else(default_profiles);
 
         Ok(Self {
-            enabled,
+            enabled: value
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             aliases,
             profiles,
             max_fallbacks: value
@@ -354,12 +374,6 @@ impl ModelProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ModelUsage {
-    tokens: u64,
-    requests: u64,
-}
-
 fn model_usage(stats: &Value, provider: &str, model: &str) -> ModelUsage {
     let key = format!("{model}|{provider}");
     let entry = stats
@@ -397,43 +411,28 @@ fn total_tokens(stats: &Value) -> u64 {
         )
 }
 
-fn budget_exhausted(
-    profile: &ModelProfile,
-    today_tokens: u64,
-    week_tokens: u64,
-    today_requests: u64,
-    week_requests: u64,
-) -> bool {
-    over_budget(today_tokens, profile.daily_token_budget)
-        || over_budget(week_tokens, profile.weekly_token_budget)
-        || over_budget(today_requests, profile.daily_request_budget)
-        || over_budget(week_requests, profile.weekly_request_budget)
+fn budget_exhausted(profile: &ModelProfile, today: ModelUsage, week: ModelUsage) -> bool {
+    over_budget(today.tokens, profile.daily_token_budget)
+        || over_budget(week.tokens, profile.weekly_token_budget)
+        || over_budget(today.requests, profile.daily_request_budget)
+        || over_budget(week.requests, profile.weekly_request_budget)
 }
 
 fn over_budget(used: u64, budget: Option<u64>) -> bool {
     budget.is_some_and(|budget| used >= budget)
 }
 
-fn quota_bias(
-    profile: &ModelProfile,
-    today_tokens: u64,
-    week_tokens: u64,
-    today_requests: u64,
-    week_requests: u64,
-) -> i64 {
-    quota_pressure(today_tokens, profile.daily_token_budget)
-        + quota_pressure(week_tokens, profile.weekly_token_budget)
-        + quota_pressure(today_requests, profile.daily_request_budget)
-        + quota_pressure(week_requests, profile.weekly_request_budget)
+fn quota_bias(profile: &ModelProfile, today: ModelUsage, week: ModelUsage) -> i64 {
+    quota_pressure(today.tokens, profile.daily_token_budget)
+        + quota_pressure(week.tokens, profile.weekly_token_budget)
+        + quota_pressure(today.requests, profile.daily_request_budget)
+        + quota_pressure(week.requests, profile.weekly_request_budget)
 }
 
 fn quota_pressure(used: u64, budget: Option<u64>) -> i64 {
     let Some(budget) = budget else {
         return 0;
     };
-    if budget == 0 {
-        return 0;
-    }
     let ratio = used as f64 / budget as f64;
     if ratio >= 0.95 {
         -80
@@ -493,15 +492,13 @@ fn context_bias(profile: &ModelProfile, input_tokens: u64, large_context_tokens:
     {
         score += 24;
     }
-    if profile.context_window > 0 {
-        let utilization = input_tokens as f64 / profile.context_window as f64;
-        if utilization >= 0.90 {
-            score -= 45;
-        } else if utilization >= 0.80 {
-            score -= 25;
-        } else if utilization >= 0.65 {
-            score -= 10;
-        }
+    let utilization = input_tokens as f64 / profile.context_window as f64;
+    if utilization >= 0.90 {
+        score -= 45;
+    } else if utilization >= 0.80 {
+        score -= 25;
+    } else if utilization >= 0.65 {
+        score -= 10;
     }
     score
 }
@@ -524,124 +521,100 @@ fn risk_complexity_bias(profile: &ModelProfile, risk: u8, complexity: u8) -> i64
                 -12
             }
         }
-        _ => {
-            if risk >= 3 {
-                -8
-            } else {
-                0
-            }
-        }
+        _ if risk >= 3 => -8,
+        _ => 0,
     }
-}
-
-fn fallback_count(config: &RouterConfig, risk: u8, complexity: u8) -> usize {
-    if risk >= 3 {
-        config.max_fallbacks.max(5)
-    } else if risk >= 2 || complexity >= 4 {
-        config.max_fallbacks.max(4)
-    } else {
-        config.max_fallbacks
-    }
-    .clamp(1, 5)
 }
 
 fn default_profiles() -> Vec<ModelProfile> {
     vec![
-        ModelProfile {
-            name: "gemini".into(),
-            model: "ag/gemini-3.8-flash-high".into(),
-            tier: "high_volume".into(),
-            roles: vec![
-                "frontend".into(),
-                "architecture".into(),
-                "debugging".into(),
-                "general".into(),
-                "large_context".into(),
+        profile(
+            "gemini",
+            "ag/gemini-3.8-flash-high",
+            "high_volume",
+            &[
+                "frontend",
+                "architecture",
+                "debugging",
+                "general",
+                "large_context",
             ],
-            context_window: 1_048_576,
-            base_score: 76,
-            target_share: Some(0.45),
-            daily_token_budget: None,
-            weekly_token_budget: None,
-            daily_request_budget: None,
-            weekly_request_budget: None,
-        },
-        ModelProfile {
-            name: "deepseek".into(),
-            model: "cbcn/deepseek-v4.1-flash".into(),
-            tier: "high_volume".into(),
-            roles: vec![
-                "backend".into(),
-                "testing".into(),
-                "debugging".into(),
-                "general".into(),
-                "large_context".into(),
+            1_048_576,
+            76,
+            0.45,
+        ),
+        profile(
+            "deepseek",
+            "cbcn/deepseek-v4.1-flash",
+            "high_volume",
+            &[
+                "backend",
+                "testing",
+                "debugging",
+                "general",
+                "large_context",
             ],
-            context_window: 1_000_000,
-            base_score: 72,
-            target_share: Some(0.30),
-            daily_token_budget: None,
-            weekly_token_budget: None,
-            daily_request_budget: None,
-            weekly_request_budget: None,
-        },
-        ModelProfile {
-            name: "luna".into(),
-            model: "cx/gpt-5.6-luna".into(),
-            tier: "high_volume".into(),
-            roles: vec!["scout".into(), "general".into()],
-            context_window: 1_050_000,
-            base_score: 60,
-            target_share: Some(0.18),
-            daily_token_budget: None,
-            weekly_token_budget: None,
-            daily_request_budget: None,
-            weekly_request_budget: None,
-        },
-        ModelProfile {
-            name: "sol".into(),
-            model: "cx/gpt-5.6-sol".into(),
-            tier: "limited".into(),
-            roles: vec![
-                "architecture".into(),
-                "security".into(),
-                "debugging".into(),
-            ],
-            context_window: 1_050_000,
-            base_score: 47,
-            target_share: Some(0.05),
-            daily_token_budget: None,
-            weekly_token_budget: None,
-            daily_request_budget: None,
-            weekly_request_budget: None,
-        },
-        ModelProfile {
-            name: "astra".into(),
-            model: "cx/gpt-6-astra".into(),
-            tier: "scarce".into(),
-            roles: vec![
-                "security".into(),
-                "architecture".into(),
-                "debugging".into(),
-            ],
-            context_window: 1_050_000,
-            base_score: 38,
-            target_share: Some(0.02),
-            daily_token_budget: None,
-            weekly_token_budget: None,
-            daily_request_budget: None,
-            weekly_request_budget: None,
-        },
+            1_000_000,
+            72,
+            0.30,
+        ),
+        profile(
+            "luna",
+            "cx/gpt-5.6-luna",
+            "high_volume",
+            &["scout", "general"],
+            1_050_000,
+            60,
+            0.18,
+        ),
+        profile(
+            "sol",
+            "cx/gpt-5.6-sol",
+            "limited",
+            &["architecture", "security", "debugging"],
+            1_050_000,
+            47,
+            0.05,
+        ),
+        profile(
+            "astra",
+            "cx/gpt-6-astra",
+            "scarce",
+            &["security", "architecture", "debugging"],
+            1_050_000,
+            38,
+            0.02,
+        ),
     ]
+}
+
+fn profile(
+    name: &str,
+    model: &str,
+    tier: &str,
+    roles: &[&str],
+    context_window: u64,
+    base_score: i64,
+    target_share: f64,
+) -> ModelProfile {
+    ModelProfile {
+        name: name.into(),
+        model: model.into(),
+        tier: tier.into(),
+        roles: roles.iter().map(|role| (*role).into()).collect(),
+        context_window,
+        base_score,
+        target_share: Some(target_share),
+        daily_token_budget: None,
+        weekly_token_budget: None,
+        daily_request_budget: None,
+        weekly_request_budget: None,
+    }
 }
 
 fn estimate_input_tokens(value: &Value) -> u64 {
     let chars = estimate_text_chars(value);
     let structure = estimate_structure_units(value);
-    // This is deliberately conservative and tokenizer-independent. Coding/text
-    // payloads are commonly 3-4 UTF-8 characters per token; using 3.5 plus a
-    // small structural allowance makes the router avoid context cliffs without
-    // requiring a provider-specific tokenizer on the hot path.
     ((chars as f64 / 3.5).ceil() as u64)
         .saturating_add(structure)
         .max(1)
@@ -701,55 +674,113 @@ fn classify_task(text: &str) -> String {
     if contains_any(
         &text,
         &[
-            "security", "oauth", "rbac", "authorization", "authentication", "privilege",
-            "injection", "xss", "csrf", "secret", "cve", "tenant escape",
+            "security",
+            "oauth",
+            "rbac",
+            "authorization",
+            "authentication",
+            "privilege",
+            "injection",
+            "xss",
+            "csrf",
+            "secret",
+            "cve",
+            "tenant escape",
         ],
     ) {
         "security"
     } else if contains_any(
         &text,
         &[
-            "architecture", "system design", "distributed", "microservice", "design the system",
-            "schema design", "migration plan", "tradeoff",
+            "architecture",
+            "system design",
+            "distributed",
+            "microservice",
+            "design the system",
+            "schema design",
+            "migration plan",
+            "tradeoff",
         ],
     ) {
         "architecture"
     } else if contains_any(
         &text,
         &[
-            "test", "spec", "coverage", "cargo test", "pytest", "jest", "playwright", "e2e",
+            "test",
+            "spec",
+            "coverage",
+            "cargo test",
+            "pytest",
+            "jest",
+            "playwright",
+            "e2e",
         ],
     ) {
         "testing"
     } else if contains_any(
         &text,
         &[
-            "frontend", "react", "next.js", "nextjs", "svelte", "vue", "css", "tailwind",
-            "component", "responsive", "accessibility", "ui ",
+            "frontend",
+            "react",
+            "next.js",
+            "nextjs",
+            "svelte",
+            "vue",
+            "css",
+            "tailwind",
+            "component",
+            "responsive",
+            "accessibility",
+            "ui ",
         ],
     ) {
         "frontend"
     } else if contains_any(
         &text,
         &[
-            "backend", "api", "endpoint", "database", "sql", "postgres", "sqlite", "rust",
-            "service", "controller", "repository layer", "grpc",
+            "backend",
+            "api",
+            "endpoint",
+            "database",
+            "sql",
+            "postgres",
+            "sqlite",
+            "rust",
+            "service",
+            "controller",
+            "repository layer",
+            "grpc",
         ],
     ) {
         "backend"
     } else if contains_any(
         &text,
         &[
-            "bug", "debug", "error", "crash", "panic", "failing", "failed", "traceback",
-            "root cause", "regression",
+            "bug",
+            "debug",
+            "error",
+            "crash",
+            "panic",
+            "failing",
+            "failed",
+            "traceback",
+            "root cause",
+            "regression",
         ],
     ) {
         "debugging"
     } else if contains_any(
         &text,
         &[
-            "summarize", "search", "find", "locate", "scan repo", "readme", "documentation",
-            "docs", "explain files",
+            "summarize",
+            "search",
+            "find",
+            "locate",
+            "scan repo",
+            "readme",
+            "documentation",
+            "docs",
+            "explain files",
         ],
     ) {
         "scout"
@@ -761,20 +792,34 @@ fn classify_task(text: &str) -> String {
 
 fn risk_score(text: &str, task: &str) -> u8 {
     let text = text.to_ascii_lowercase();
-    let mut score = 0u8;
-    if task == "security" {
-        score = score.saturating_add(2);
-    }
+    let mut score = u8::from(task == "security") * 2;
     if contains_any(
         &text,
         &[
-            "production", "billing", "payment", "delete", "drop table", "destructive", "migration",
-            "secret", "credential", "data loss",
+            "production",
+            "billing",
+            "payment",
+            "delete",
+            "drop table",
+            "destructive",
+            "migration",
+            "secret",
+            "credential",
+            "data loss",
         ],
     ) {
         score = score.saturating_add(1);
     }
-    if contains_any(&text, &["critical", "p0", "incident", "privilege escalation", "tenant escape"]) {
+    if contains_any(
+        &text,
+        &[
+            "critical",
+            "p0",
+            "incident",
+            "privilege escalation",
+            "tenant escape",
+        ],
+    ) {
         score = score.saturating_add(1);
     }
     score.min(4)
@@ -782,44 +827,35 @@ fn risk_score(text: &str, task: &str) -> u8 {
 
 fn complexity_score(canonical: &Value, input_tokens: u64, text: &str, task: &str) -> u8 {
     let mut score = 0u8;
-    if input_tokens >= 64_000 {
-        score += 1;
-    }
-    if input_tokens >= 160_000 {
-        score += 1;
-    }
-    if input_tokens >= 300_000 {
-        score += 1;
-    }
-    let messages = canonical
-        .get("messages")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    if messages >= 20 {
-        score += 1;
-    }
-    let tools = canonical
-        .get("tools")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    if tools >= 10 {
-        score += 1;
-    }
-    if matches!(task, "architecture" | "security" | "debugging") {
-        score += 1;
-    }
-    let lower = text.to_ascii_lowercase();
-    if contains_any(
-        &lower,
+    score += u8::from(input_tokens >= 64_000);
+    score += u8::from(input_tokens >= 160_000);
+    score += u8::from(input_tokens >= 300_000);
+    score += u8::from(
+        canonical
+            .get("messages")
+            .and_then(Value::as_array)
+            .is_some_and(|messages| messages.len() >= 20),
+    );
+    score += u8::from(
+        canonical
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| tools.len() >= 10),
+    );
+    score += u8::from(matches!(task, "architecture" | "security" | "debugging"));
+    score += u8::from(contains_any(
+        &text.to_ascii_lowercase(),
         &[
-            "multi-file", "cross-service", "large refactor", "concurrency", "race condition",
-            "distributed", "production incident", "unknown root cause",
+            "multi-file",
+            "cross-service",
+            "large refactor",
+            "concurrency",
+            "race condition",
+            "distributed",
+            "production incident",
+            "unknown root cause",
         ],
-    ) {
-        score += 1;
-    }
+    ));
     score.min(5)
 }
 
@@ -887,7 +923,10 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 }
 
 fn truthy(value: &str) -> bool {
-    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[cfg(test)]
@@ -896,11 +935,23 @@ mod tests {
 
     #[test]
     fn classifies_common_full_stack_tasks() {
-        assert_eq!(classify_task("Build a React dashboard component"), "frontend");
-        assert_eq!(classify_task("Add Rust API endpoint and SQLite query"), "backend");
+        assert_eq!(
+            classify_task("Build a React dashboard component"),
+            "frontend"
+        );
+        assert_eq!(
+            classify_task("Add Rust API endpoint and SQLite query"),
+            "backend"
+        );
         assert_eq!(classify_task("Add Playwright e2e coverage"), "testing");
-        assert_eq!(classify_task("Review OAuth RBAC privilege escalation"), "security");
-        assert_eq!(classify_task("Find and summarize the relevant files"), "scout");
+        assert_eq!(
+            classify_task("Review OAuth RBAC privilege escalation"),
+            "security"
+        );
+        assert_eq!(
+            classify_task("Find and summarize the relevant files"),
+            "scout"
+        );
     }
 
     #[test]
@@ -922,20 +973,25 @@ mod tests {
 
     #[test]
     fn premium_models_are_penalized_for_easy_work_and_recovered_for_risk() {
-        let profile = ModelProfile {
-            name: "premium".into(),
-            model: "provider/model".into(),
-            tier: "limited".into(),
-            roles: vec!["security".into()],
-            context_window: 1_000_000,
-            base_score: 0,
-            target_share: None,
-            daily_token_budget: None,
-            weekly_token_budget: None,
-            daily_request_budget: None,
-            weekly_request_budget: None,
-        };
+        let profile = profile(
+            "premium",
+            "provider/model",
+            "limited",
+            &["security"],
+            1_000_000,
+            0,
+            0.05,
+        );
         assert!(risk_complexity_bias(&profile, 0, 1) < 0);
         assert!(risk_complexity_bias(&profile, 3, 4) > 0);
+    }
+
+    #[test]
+    fn default_config_is_opt_in() {
+        let value = json!({});
+        assert!(!value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false));
     }
 }
