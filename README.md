@@ -14,6 +14,15 @@ Rust owns the public 9Router listener while the existing Next/React application 
 
 ## Run the usable compatibility stack
 
+### Cross-platform (Node / npm)
+
+```bash
+npm run dev   # development (Next dev + Rust debug)
+npm start     # production (Next standalone + Rust release)
+```
+
+### Linux / macOS (bash)
+
 Development:
 
 ```bash
@@ -24,6 +33,29 @@ Production build:
 
 ```bash
 ./scripts/run-prod.sh .
+```
+
+### Windows (PowerShell)
+
+Development:
+
+```powershell
+.\scripts\run-dev.ps1
+```
+
+Production build:
+
+```powershell
+.\scripts\run-prod.ps1
+```
+
+### Direct Node runner
+
+```bash
+node scripts/run.mjs dev
+node scripts/run.mjs start
+node scripts/run.mjs build
+node scripts/run.mjs test
 ```
 
 Both commands:

@@ -5,8 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-cp -a "$ROOT/frontend" "$TMP/frontend"
-rm -rf "$TMP/frontend/node_modules" "$TMP/frontend/.next"
+tar --exclude='node_modules' --exclude='.next' -cf - -C "$ROOT" frontend | tar -xf - -C "$TMP"
 
 # Simulate a stale/upstream refresh that lost the reviewed trust-boundary files.
 printf '%s\n' '// intentionally stale custom server' > "$TMP/frontend/custom-server.js"

@@ -1,0 +1,14 @@
+{
+  "name": "9router-rust",
+  "version": "1.0.1",
+  "description": "9Router Rust backend with retained Next.js dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/run.mjs dev",
+    "start": "node scripts/run.mjs start",
+    "prod": "node scripts/run.mjs prod",
+    "build": "node scripts/run.mjs build",
+    "test": "node scripts/run.mjs test"
+  }
+}

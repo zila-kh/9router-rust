@@ -1,6 +1,7 @@
 # Rust build artifacts
 target/
 rust-backend/target/
+artifacts/
 **/*.rs.bk
 Cargo.lock.orig
 
