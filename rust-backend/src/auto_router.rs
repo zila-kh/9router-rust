@@ -1,0 +1,941 @@
+use axum::http::HeaderMap;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::time::{Duration, Instant};
+
+use crate::{error::AppError, providers, state::AppState};
+
+const ROUTER_VERSION: &str = "1";
+const DEFAULT_LARGE_CONTEXT_TOKENS: u64 = 160_000;
+const DEFAULT_HARD_CONTEXT_TOKENS: u64 = 850_000;
+const MIN_PREFIX_CHARS_FOR_AFFINITY: usize = 512;
+
+#[derive(Debug, Clone)]
+pub struct RoutePlan {
+    pub targets: Vec<String>,
+    pub estimated_input_tokens: u64,
+    pub task: String,
+    pub risk: u8,
+    pub complexity: u8,
+    pub affinity_key: Option<String>,
+    pub affinity_hit: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RouterConfig {
+    enabled: bool,
+    aliases: Vec<String>,
+    profiles: Vec<ModelProfile>,
+    max_fallbacks: usize,
+    large_context_tokens: u64,
+    hard_context_tokens: u64,
+    allow_large_context: bool,
+    cache_affinity: bool,
+    cache_affinity_ttl_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ModelProfile {
+    name: String,
+    model: String,
+    tier: String,
+    roles: Vec<String>,
+    context_window: u64,
+    base_score: i64,
+    target_share: Option<f64>,
+    daily_token_budget: Option<u64>,
+    weekly_token_budget: Option<u64>,
+    daily_request_budget: Option<u64>,
+    weekly_request_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct Candidate {
+    profile: ModelProfile,
+    provider: String,
+    upstream_model: String,
+    score: i64,
+}
+
+#[derive(Debug, Clone)]
+struct UsageSnapshot {
+    today: Value,
+    week: Value,
+}
+
+#[derive(Debug, Clone)]
+struct AffinityEntry {
+    model: String,
+    touched: Instant,
+}
+
+static AFFINITY: Lazy<DashMap<String, AffinityEntry>> = Lazy::new(DashMap::new);
+
+pub fn plan_if_requested(
+    state: &AppState,
+    requested: &str,
+    canonical: &Value,
+    headers: &HeaderMap,
+) -> Result<Option<RoutePlan>, AppError> {
+    let config = RouterConfig::load(state)?;
+    if !config.enabled
+        || !config
+            .aliases
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(requested))
+    {
+        return Ok(None);
+    }
+
+    let estimated_input_tokens = estimate_input_tokens(canonical);
+    let allow_large_header = headers
+        .get("x-9router-allow-large-context")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(truthy);
+    if estimated_input_tokens > config.hard_context_tokens
+        && !config.allow_large_context
+        && !allow_large_header
+    {
+        return Err(AppError::BadRequest(format!(
+            "auto router estimated {estimated_input_tokens} input tokens, above its safety limit of {}. Compact/retrieve less context, raise autoRouter.hardContextTokens, set autoRouter.allowLargeContext=true, or explicitly choose a model to bypass the optional auto-router guard",
+            config.hard_context_tokens
+        )));
+    }
+
+    let latest = latest_user_text(canonical);
+    let task = classify_task(&latest);
+    let risk = risk_score(&latest, &task);
+    let complexity = complexity_score(canonical, estimated_input_tokens, &latest, &task);
+    let affinity_key = if config.cache_affinity {
+        affinity_key(canonical, headers)
+    } else {
+        None
+    };
+    cleanup_affinity(config.cache_affinity_ttl_secs);
+    let affinity_model = affinity_key.as_ref().and_then(|key| {
+        AFFINITY.get(key).and_then(|entry| {
+            (entry.touched.elapsed() <= Duration::from_secs(config.cache_affinity_ttl_secs))
+                .then(|| entry.model.clone())
+        })
+    });
+
+    let usage = UsageSnapshot {
+        today: state.db.usage_stats("today")?,
+        week: state.db.usage_stats("7d")?,
+    };
+    let today_total = total_tokens(&usage.today);
+    let mut candidates = Vec::new();
+
+    for profile in config.profiles.clone() {
+        if estimated_input_tokens > profile.context_window.saturating_mul(95) / 100 {
+            continue;
+        }
+        let resolved = match providers::resolve_model(state, &profile.model) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                tracing::debug!(model=%profile.model, error=%error, "auto-router candidate unavailable");
+                continue;
+            }
+        };
+
+        let today_model = model_usage(&usage.today, &resolved.provider, &resolved.model);
+        let week_model = model_usage(&usage.week, &resolved.provider, &resolved.model);
+        if budget_exhausted(&profile, today_model.tokens, week_model.tokens, today_model.requests, week_model.requests) {
+            tracing::debug!(model=%profile.model, "auto-router candidate excluded by configured quota");
+            continue;
+        }
+
+        let mut score = profile.base_score;
+        score += tier_bias(&profile.tier);
+        score += role_bias(&profile.roles, &task);
+        score += context_bias(
+            &profile,
+            estimated_input_tokens,
+            config.large_context_tokens,
+        );
+        score += risk_complexity_bias(&profile, risk, complexity);
+        score += quota_bias(
+            &profile,
+            today_model.tokens,
+            week_model.tokens,
+            today_model.requests,
+            week_model.requests,
+        );
+        score += share_bias(&profile, today_model.tokens, today_total);
+
+        if affinity_model.as_deref() == Some(profile.model.as_str()) {
+            score += 35;
+        }
+
+        candidates.push(Candidate {
+            profile,
+            provider: resolved.provider,
+            upstream_model: resolved.model,
+            score,
+        });
+    }
+
+    if candidates.is_empty() {
+        return Err(AppError::NotFound(
+            "auto router has no available candidate models; configure autoRouter.profiles or activate one of the configured providers".into(),
+        ));
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.profile.name.cmp(&right.profile.name))
+    });
+
+    let fallback_count = fallback_count(&config, risk, complexity).min(candidates.len());
+    let targets = candidates
+        .iter()
+        .take(fallback_count)
+        .map(|candidate| candidate.profile.model.clone())
+        .collect::<Vec<_>>();
+
+    tracing::info!(
+        router_version=ROUTER_VERSION,
+        task,
+        risk,
+        complexity,
+        estimated_input_tokens,
+        targets=?targets,
+        scores=?candidates.iter().map(|candidate| (&candidate.profile.model, candidate.score, &candidate.provider, &candidate.upstream_model)).collect::<Vec<_>>(),
+        "auto-router planned request"
+    );
+
+    Ok(Some(RoutePlan {
+        targets,
+        estimated_input_tokens,
+        task,
+        risk,
+        complexity,
+        affinity_key,
+        affinity_hit: affinity_model.is_some(),
+    }))
+}
+
+pub fn remember_success(plan: &RoutePlan, model: &str) {
+    if let Some(key) = plan.affinity_key.as_ref() {
+        AFFINITY.insert(
+            key.clone(),
+            AffinityEntry {
+                model: model.to_string(),
+                touched: Instant::now(),
+            },
+        );
+    }
+}
+
+pub fn annotate_response(response: &mut axum::http::Response<axum::body::Body>, plan: &RoutePlan, model: &str) {
+    insert_header(response, "x-9router-auto-route", "1");
+    insert_header(response, "x-9router-router-version", ROUTER_VERSION);
+    insert_header(response, "x-9router-selected-model", model);
+    insert_header(response, "x-9router-task", &plan.task);
+    insert_header(
+        response,
+        "x-9router-estimated-input-tokens",
+        &plan.estimated_input_tokens.to_string(),
+    );
+    insert_header(response, "x-9router-risk", &plan.risk.to_string());
+    insert_header(
+        response,
+        "x-9router-complexity",
+        &plan.complexity.to_string(),
+    );
+    insert_header(
+        response,
+        "x-9router-cache-affinity",
+        if plan.affinity_hit { "hit" } else { "miss" },
+    );
+}
+
+fn insert_header(
+    response: &mut axum::http::Response<axum::body::Body>,
+    name: &'static str,
+    value: &str,
+) {
+    if let Ok(value) = axum::http::HeaderValue::from_str(value) {
+        response.headers_mut().insert(name, value);
+    }
+}
+
+impl RouterConfig {
+    fn load(state: &AppState) -> Result<Self, AppError> {
+        let settings = state.db.settings()?;
+        let value = settings.get("autoRouter").cloned().unwrap_or_else(|| json!({}));
+        let enabled = value.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        let aliases = string_array(value.get("aliases"))
+            .filter(|aliases| !aliases.is_empty())
+            .unwrap_or_else(|| vec!["auto".into(), "9router-auto".into()]);
+        let profiles = value
+            .get("profiles")
+            .and_then(Value::as_array)
+            .filter(|profiles| !profiles.is_empty())
+            .map(|profiles| profiles.iter().filter_map(ModelProfile::from_value).collect())
+            .filter(|profiles: &Vec<ModelProfile>| !profiles.is_empty())
+            .unwrap_or_else(default_profiles);
+
+        Ok(Self {
+            enabled,
+            aliases,
+            profiles,
+            max_fallbacks: value
+                .get("maxFallbacks")
+                .and_then(Value::as_u64)
+                .unwrap_or(3)
+                .clamp(1, 5) as usize,
+            large_context_tokens: value
+                .get("largeContextTokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_LARGE_CONTEXT_TOKENS),
+            hard_context_tokens: value
+                .get("hardContextTokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_HARD_CONTEXT_TOKENS),
+            allow_large_context: value
+                .get("allowLargeContext")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            cache_affinity: value
+                .get("cacheAffinity")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            cache_affinity_ttl_secs: value
+                .get("cacheAffinityTtlSecs")
+                .and_then(Value::as_u64)
+                .unwrap_or(1800)
+                .clamp(60, 86_400),
+        })
+    }
+}
+
+impl ModelProfile {
+    fn from_value(value: &Value) -> Option<Self> {
+        let model = value.get("model")?.as_str()?.trim();
+        if model.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name: value
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(model)
+                .to_string(),
+            model: model.to_string(),
+            tier: value
+                .get("tier")
+                .and_then(Value::as_str)
+                .unwrap_or("standard")
+                .to_ascii_lowercase(),
+            roles: string_array(value.get("roles")).unwrap_or_default(),
+            context_window: value
+                .get("contextWindow")
+                .and_then(Value::as_u64)
+                .unwrap_or(262_144)
+                .max(16_384),
+            base_score: value
+                .get("baseScore")
+                .and_then(Value::as_i64)
+                .unwrap_or(50),
+            target_share: value
+                .get("targetShare")
+                .and_then(Value::as_f64)
+                .filter(|share| *share > 0.0 && *share <= 1.0),
+            daily_token_budget: positive_u64(value.get("dailyTokenBudget")),
+            weekly_token_budget: positive_u64(value.get("weeklyTokenBudget")),
+            daily_request_budget: positive_u64(value.get("dailyRequestBudget")),
+            weekly_request_budget: positive_u64(value.get("weeklyRequestBudget")),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ModelUsage {
+    tokens: u64,
+    requests: u64,
+}
+
+fn model_usage(stats: &Value, provider: &str, model: &str) -> ModelUsage {
+    let key = format!("{model}|{provider}");
+    let entry = stats
+        .get("byModel")
+        .and_then(Value::as_object)
+        .and_then(|models| models.get(&key));
+    let prompt = entry
+        .and_then(|entry| entry.get("promptTokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let completion = entry
+        .and_then(|entry| entry.get("completionTokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let requests = entry
+        .and_then(|entry| entry.get("requests"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    ModelUsage {
+        tokens: prompt.saturating_add(completion),
+        requests,
+    }
+}
+
+fn total_tokens(stats: &Value) -> u64 {
+    stats
+        .get("totalPromptTokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .saturating_add(
+            stats
+                .get("totalCompletionTokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+}
+
+fn budget_exhausted(
+    profile: &ModelProfile,
+    today_tokens: u64,
+    week_tokens: u64,
+    today_requests: u64,
+    week_requests: u64,
+) -> bool {
+    over_budget(today_tokens, profile.daily_token_budget)
+        || over_budget(week_tokens, profile.weekly_token_budget)
+        || over_budget(today_requests, profile.daily_request_budget)
+        || over_budget(week_requests, profile.weekly_request_budget)
+}
+
+fn over_budget(used: u64, budget: Option<u64>) -> bool {
+    budget.is_some_and(|budget| used >= budget)
+}
+
+fn quota_bias(
+    profile: &ModelProfile,
+    today_tokens: u64,
+    week_tokens: u64,
+    today_requests: u64,
+    week_requests: u64,
+) -> i64 {
+    quota_pressure(today_tokens, profile.daily_token_budget)
+        + quota_pressure(week_tokens, profile.weekly_token_budget)
+        + quota_pressure(today_requests, profile.daily_request_budget)
+        + quota_pressure(week_requests, profile.weekly_request_budget)
+}
+
+fn quota_pressure(used: u64, budget: Option<u64>) -> i64 {
+    let Some(budget) = budget else {
+        return 0;
+    };
+    if budget == 0 {
+        return 0;
+    }
+    let ratio = used as f64 / budget as f64;
+    if ratio >= 0.95 {
+        -80
+    } else if ratio >= 0.85 {
+        -50
+    } else if ratio >= 0.70 {
+        -30
+    } else if ratio >= 0.50 {
+        -10
+    } else {
+        0
+    }
+}
+
+fn share_bias(profile: &ModelProfile, model_tokens: u64, all_tokens: u64) -> i64 {
+    let Some(target_share) = profile.target_share else {
+        return 0;
+    };
+    if all_tokens < 10_000 {
+        return 0;
+    }
+    let share = model_tokens as f64 / all_tokens as f64;
+    if share > target_share * 1.75 {
+        -30
+    } else if share > target_share * 1.35 {
+        -15
+    } else if share < target_share * 0.65 {
+        8
+    } else {
+        0
+    }
+}
+
+fn tier_bias(tier: &str) -> i64 {
+    match tier {
+        "high_volume" | "bulk" => 12,
+        "premium" | "limited" => -20,
+        "critical" | "scarce" => -38,
+        _ => 0,
+    }
+}
+
+fn role_bias(roles: &[String], task: &str) -> i64 {
+    if roles.iter().any(|role| role == task) {
+        30
+    } else if roles.iter().any(|role| role == "general") {
+        8
+    } else {
+        0
+    }
+}
+
+fn context_bias(profile: &ModelProfile, input_tokens: u64, large_context_tokens: u64) -> i64 {
+    let mut score = 0;
+    if input_tokens >= large_context_tokens
+        && profile.roles.iter().any(|role| role == "large_context")
+    {
+        score += 24;
+    }
+    if profile.context_window > 0 {
+        let utilization = input_tokens as f64 / profile.context_window as f64;
+        if utilization >= 0.90 {
+            score -= 45;
+        } else if utilization >= 0.80 {
+            score -= 25;
+        } else if utilization >= 0.65 {
+            score -= 10;
+        }
+    }
+    score
+}
+
+fn risk_complexity_bias(profile: &ModelProfile, risk: u8, complexity: u8) -> i64 {
+    match profile.tier.as_str() {
+        "critical" | "scarce" => {
+            if risk >= 3 {
+                60
+            } else if complexity >= 4 {
+                28
+            } else {
+                -25
+            }
+        }
+        "premium" | "limited" => {
+            if risk >= 2 || complexity >= 3 {
+                30
+            } else {
+                -12
+            }
+        }
+        _ => {
+            if risk >= 3 {
+                -8
+            } else {
+                0
+            }
+        }
+    }
+}
+
+fn fallback_count(config: &RouterConfig, risk: u8, complexity: u8) -> usize {
+    if risk >= 3 {
+        config.max_fallbacks.max(5)
+    } else if risk >= 2 || complexity >= 4 {
+        config.max_fallbacks.max(4)
+    } else {
+        config.max_fallbacks
+    }
+    .clamp(1, 5)
+}
+
+fn default_profiles() -> Vec<ModelProfile> {
+    vec![
+        ModelProfile {
+            name: "gemini".into(),
+            model: "ag/gemini-3.8-flash-high".into(),
+            tier: "high_volume".into(),
+            roles: vec![
+                "frontend".into(),
+                "architecture".into(),
+                "debugging".into(),
+                "general".into(),
+                "large_context".into(),
+            ],
+            context_window: 1_048_576,
+            base_score: 76,
+            target_share: Some(0.45),
+            daily_token_budget: None,
+            weekly_token_budget: None,
+            daily_request_budget: None,
+            weekly_request_budget: None,
+        },
+        ModelProfile {
+            name: "deepseek".into(),
+            model: "cbcn/deepseek-v4.1-flash".into(),
+            tier: "high_volume".into(),
+            roles: vec![
+                "backend".into(),
+                "testing".into(),
+                "debugging".into(),
+                "general".into(),
+                "large_context".into(),
+            ],
+            context_window: 1_000_000,
+            base_score: 72,
+            target_share: Some(0.30),
+            daily_token_budget: None,
+            weekly_token_budget: None,
+            daily_request_budget: None,
+            weekly_request_budget: None,
+        },
+        ModelProfile {
+            name: "luna".into(),
+            model: "cx/gpt-5.6-luna".into(),
+            tier: "high_volume".into(),
+            roles: vec!["scout".into(), "general".into()],
+            context_window: 1_050_000,
+            base_score: 60,
+            target_share: Some(0.18),
+            daily_token_budget: None,
+            weekly_token_budget: None,
+            daily_request_budget: None,
+            weekly_request_budget: None,
+        },
+        ModelProfile {
+            name: "sol".into(),
+            model: "cx/gpt-5.6-sol".into(),
+            tier: "limited".into(),
+            roles: vec![
+                "architecture".into(),
+                "security".into(),
+                "debugging".into(),
+            ],
+            context_window: 1_050_000,
+            base_score: 47,
+            target_share: Some(0.05),
+            daily_token_budget: None,
+            weekly_token_budget: None,
+            daily_request_budget: None,
+            weekly_request_budget: None,
+        },
+        ModelProfile {
+            name: "astra".into(),
+            model: "cx/gpt-6-astra".into(),
+            tier: "scarce".into(),
+            roles: vec![
+                "security".into(),
+                "architecture".into(),
+                "debugging".into(),
+            ],
+            context_window: 1_050_000,
+            base_score: 38,
+            target_share: Some(0.02),
+            daily_token_budget: None,
+            weekly_token_budget: None,
+            daily_request_budget: None,
+            weekly_request_budget: None,
+        },
+    ]
+}
+
+fn estimate_input_tokens(value: &Value) -> u64 {
+    let chars = estimate_text_chars(value);
+    let structure = estimate_structure_units(value);
+    // This is deliberately conservative and tokenizer-independent. Coding/text
+    // payloads are commonly 3-4 UTF-8 characters per token; using 3.5 plus a
+    // small structural allowance makes the router avoid context cliffs without
+    // requiring a provider-specific tokenizer on the hot path.
+    ((chars as f64 / 3.5).ceil() as u64)
+        .saturating_add(structure)
+        .max(1)
+}
+
+fn estimate_text_chars(value: &Value) -> usize {
+    match value {
+        Value::String(text) => text.chars().count(),
+        Value::Array(values) => values.iter().map(estimate_text_chars).sum(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| key.chars().count() + estimate_text_chars(value))
+            .sum(),
+        Value::Null | Value::Bool(_) | Value::Number(_) => 0,
+    }
+}
+
+fn estimate_structure_units(value: &Value) -> u64 {
+    match value {
+        Value::Array(values) => 2 + values.iter().map(estimate_structure_units).sum::<u64>(),
+        Value::Object(map) => 4 + map.values().map(estimate_structure_units).sum::<u64>(),
+        Value::String(_) => 1,
+        Value::Null | Value::Bool(_) | Value::Number(_) => 1,
+    }
+}
+
+fn latest_user_text(canonical: &Value) -> String {
+    canonical
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .rev()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .map(message_text)
+        .unwrap_or_default()
+}
+
+fn message_text(message: &Value) -> String {
+    match message.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| part.get("content").and_then(Value::as_str))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn classify_task(text: &str) -> String {
+    let text = text.to_ascii_lowercase();
+    if contains_any(
+        &text,
+        &[
+            "security", "oauth", "rbac", "authorization", "authentication", "privilege",
+            "injection", "xss", "csrf", "secret", "cve", "tenant escape",
+        ],
+    ) {
+        "security"
+    } else if contains_any(
+        &text,
+        &[
+            "architecture", "system design", "distributed", "microservice", "design the system",
+            "schema design", "migration plan", "tradeoff",
+        ],
+    ) {
+        "architecture"
+    } else if contains_any(
+        &text,
+        &[
+            "test", "spec", "coverage", "cargo test", "pytest", "jest", "playwright", "e2e",
+        ],
+    ) {
+        "testing"
+    } else if contains_any(
+        &text,
+        &[
+            "frontend", "react", "next.js", "nextjs", "svelte", "vue", "css", "tailwind",
+            "component", "responsive", "accessibility", "ui ",
+        ],
+    ) {
+        "frontend"
+    } else if contains_any(
+        &text,
+        &[
+            "backend", "api", "endpoint", "database", "sql", "postgres", "sqlite", "rust",
+            "service", "controller", "repository layer", "grpc",
+        ],
+    ) {
+        "backend"
+    } else if contains_any(
+        &text,
+        &[
+            "bug", "debug", "error", "crash", "panic", "failing", "failed", "traceback",
+            "root cause", "regression",
+        ],
+    ) {
+        "debugging"
+    } else if contains_any(
+        &text,
+        &[
+            "summarize", "search", "find", "locate", "scan repo", "readme", "documentation",
+            "docs", "explain files",
+        ],
+    ) {
+        "scout"
+    } else {
+        "general"
+    }
+    .to_string()
+}
+
+fn risk_score(text: &str, task: &str) -> u8 {
+    let text = text.to_ascii_lowercase();
+    let mut score = 0u8;
+    if task == "security" {
+        score = score.saturating_add(2);
+    }
+    if contains_any(
+        &text,
+        &[
+            "production", "billing", "payment", "delete", "drop table", "destructive", "migration",
+            "secret", "credential", "data loss",
+        ],
+    ) {
+        score = score.saturating_add(1);
+    }
+    if contains_any(&text, &["critical", "p0", "incident", "privilege escalation", "tenant escape"]) {
+        score = score.saturating_add(1);
+    }
+    score.min(4)
+}
+
+fn complexity_score(canonical: &Value, input_tokens: u64, text: &str, task: &str) -> u8 {
+    let mut score = 0u8;
+    if input_tokens >= 64_000 {
+        score += 1;
+    }
+    if input_tokens >= 160_000 {
+        score += 1;
+    }
+    if input_tokens >= 300_000 {
+        score += 1;
+    }
+    let messages = canonical
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if messages >= 20 {
+        score += 1;
+    }
+    let tools = canonical
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if tools >= 10 {
+        score += 1;
+    }
+    if matches!(task, "architecture" | "security" | "debugging") {
+        score += 1;
+    }
+    let lower = text.to_ascii_lowercase();
+    if contains_any(
+        &lower,
+        &[
+            "multi-file", "cross-service", "large refactor", "concurrency", "race condition",
+            "distributed", "production incident", "unknown root cause",
+        ],
+    ) {
+        score += 1;
+    }
+    score.min(5)
+}
+
+fn affinity_key(canonical: &Value, headers: &HeaderMap) -> Option<String> {
+    if let Some(session) = headers
+        .get("x-9router-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(format!("session:{}", sha256_hex(session.as_bytes())));
+    }
+
+    let mut stable = String::new();
+    if let Some(messages) = canonical.get("messages").and_then(Value::as_array) {
+        for message in messages.iter().take(4) {
+            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+            if matches!(role, "system" | "developer" | "user") {
+                stable.push_str(role);
+                stable.push('\n');
+                stable.push_str(&message_text(message));
+                stable.push('\n');
+            }
+        }
+    }
+    if let Some(tools) = canonical.get("tools") {
+        stable.push_str(&serde_json::to_string(tools).unwrap_or_default());
+    }
+    if stable.chars().count() < MIN_PREFIX_CHARS_FOR_AFFINITY {
+        return None;
+    }
+    Some(format!("prefix:{}", sha256_hex(stable.as_bytes())))
+}
+
+fn cleanup_affinity(ttl_secs: u64) {
+    if AFFINITY.len() < 1024 {
+        return;
+    }
+    let ttl = Duration::from_secs(ttl_secs);
+    AFFINITY.retain(|_, entry| entry.touched.elapsed() <= ttl);
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn string_array(value: Option<&Value>) -> Option<Vec<String>> {
+    Some(
+        value?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|value| value.to_ascii_lowercase())
+            .collect(),
+    )
+}
+
+fn positive_u64(value: Option<&Value>) -> Option<u64> {
+    value.and_then(Value::as_u64).filter(|value| *value > 0)
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn truthy(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_common_full_stack_tasks() {
+        assert_eq!(classify_task("Build a React dashboard component"), "frontend");
+        assert_eq!(classify_task("Add Rust API endpoint and SQLite query"), "backend");
+        assert_eq!(classify_task("Add Playwright e2e coverage"), "testing");
+        assert_eq!(classify_task("Review OAuth RBAC privilege escalation"), "security");
+        assert_eq!(classify_task("Find and summarize the relevant files"), "scout");
+    }
+
+    #[test]
+    fn context_estimator_grows_with_payload() {
+        let small = json!({"messages":[{"role":"user","content":"hello"}]});
+        let large = json!({"messages":[{"role":"user","content":"x".repeat(35_000)}]});
+        assert!(estimate_input_tokens(&large) > estimate_input_tokens(&small));
+        assert!(estimate_input_tokens(&large) > 9_000);
+    }
+
+    #[test]
+    fn quota_pressure_protects_nearly_exhausted_models() {
+        assert_eq!(quota_pressure(10, None), 0);
+        assert_eq!(quota_pressure(50, Some(100)), -10);
+        assert_eq!(quota_pressure(75, Some(100)), -30);
+        assert_eq!(quota_pressure(90, Some(100)), -50);
+        assert_eq!(quota_pressure(99, Some(100)), -80);
+    }
+
+    #[test]
+    fn premium_models_are_penalized_for_easy_work_and_recovered_for_risk() {
+        let profile = ModelProfile {
+            name: "premium".into(),
+            model: "provider/model".into(),
+            tier: "limited".into(),
+            roles: vec!["security".into()],
+            context_window: 1_000_000,
+            base_score: 0,
+            target_share: None,
+            daily_token_budget: None,
+            weekly_token_budget: None,
+            daily_request_budget: None,
+            weekly_request_budget: None,
+        };
+        assert!(risk_complexity_bias(&profile, 0, 1) < 0);
+        assert!(risk_complexity_bias(&profile, 3, 4) > 0);
+    }
+}
