@@ -1,16 +1,20 @@
 use axum::http::HeaderMap;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use crate::{error::AppError, providers, state::AppState};
 
-const ROUTER_VERSION: &str = "1";
+const ROUTER_VERSION: &str = "2";
 const DEFAULT_LARGE_CONTEXT_TOKENS: u64 = 160_000;
 const DEFAULT_HARD_CONTEXT_TOKENS: u64 = 850_000;
 const MIN_PREFIX_CHARS_FOR_AFFINITY: usize = 512;
+const IMAGE_TOKEN_ESTIMATE: u64 = 4_096;
 
 #[derive(Debug, Clone)]
 pub struct RoutePlan {
@@ -121,12 +125,21 @@ pub fn plan_if_requested(
         })
     });
 
+    // The router only needs provider/model token totals. We intentionally consume
+    // the existing stats shape for compatibility; this can be replaced by a
+    // dedicated aggregate query later without changing routing semantics.
     let today = state.db.usage_stats("today")?;
     let week = state.db.usage_stats("7d")?;
     let today_total = total_tokens(&today);
     let mut candidates = Vec::new();
+    let mut seen_routes = HashSet::new();
 
     for profile in config.profiles.iter().cloned() {
+        // Limited/scarce capacity must never become an accidental fallback for an
+        // easy request merely because a cheap provider is offline.
+        if !tier_eligible(&profile, risk, complexity) {
+            continue;
+        }
         if estimated_input_tokens > profile.context_window.saturating_mul(95) / 100 {
             continue;
         }
@@ -142,6 +155,23 @@ pub fn plan_if_requested(
                 continue;
             }
         };
+
+        if !rust_gateway_supports_provider(&resolved.provider) {
+            tracing::warn!(
+                model = %profile.model,
+                provider = %resolved.provider,
+                "auto-router candidate skipped: provider transport is not executable by the native Rust gateway"
+            );
+            continue;
+        }
+
+        // Multiple aliases/profiles can map to the same provider + upstream model.
+        // Never spend fallback slots retrying the exact same route twice.
+        let route_key = format!("{}\0{}", resolved.provider, resolved.model);
+        if !seen_routes.insert(route_key) {
+            tracing::debug!(model = %profile.model, "auto-router duplicate route skipped");
+            continue;
+        }
 
         let today_model = model_usage(&today, &resolved.provider, &resolved.model);
         let week_model = model_usage(&week, &resolved.provider, &resolved.model);
@@ -178,7 +208,7 @@ pub fn plan_if_requested(
 
     if candidates.is_empty() {
         return Err(AppError::NotFound(
-            "auto router has no available candidate models; configure autoRouter.profiles or activate one of the configured providers".into(),
+            "auto router has no safe executable candidate models; configure autoRouter.profiles with models supported by the native Rust gateway and active providers".into(),
         ));
     }
 
@@ -189,6 +219,11 @@ pub fn plan_if_requested(
             .then_with(|| left.profile.name.cmp(&right.profile.name))
     });
 
+    let affinity_hit = affinity_model.as_ref().is_some_and(|model| {
+        candidates
+            .iter()
+            .any(|candidate| candidate.profile.model == *model)
+    });
     let targets = candidates
         .iter()
         .take(config.max_fallbacks.min(candidates.len()))
@@ -221,7 +256,7 @@ pub fn plan_if_requested(
         risk,
         complexity,
         affinity_key,
-        affinity_hit: affinity_model.is_some(),
+        affinity_hit,
     }))
 }
 
@@ -272,6 +307,23 @@ fn insert_header(
     if let Ok(value) = axum::http::HeaderValue::from_str(value) {
         response.headers_mut().insert(name, value);
     }
+}
+
+fn rust_gateway_supports_provider(provider: &str) -> bool {
+    let transport = providers::transport(provider);
+    matches!(
+        transport
+            .get("format")
+            .and_then(Value::as_str)
+            .unwrap_or("openai"),
+        "openai"
+            | "claude"
+            | "gemini"
+            | "openai-responses"
+            | "responses"
+            | "kiro"
+            | "commandcode"
+    )
 }
 
 impl RouterConfig {
@@ -363,10 +415,11 @@ impl ModelProfile {
                 .get("targetShare")
                 .and_then(Value::as_f64)
                 .filter(|share| *share > 0.0 && *share <= 1.0),
-            daily_token_budget: positive_u64(value.get("dailyTokenBudget")),
-            weekly_token_budget: positive_u64(value.get("weeklyTokenBudget")),
-            daily_request_budget: positive_u64(value.get("dailyRequestBudget")),
-            weekly_request_budget: positive_u64(value.get("weeklyRequestBudget")),
+            // Omitted = unlimited. Explicit zero = disabled for this router.
+            daily_token_budget: optional_u64(value.get("dailyTokenBudget")),
+            weekly_token_budget: optional_u64(value.get("weeklyTokenBudget")),
+            daily_request_budget: optional_u64(value.get("dailyRequestBudget")),
+            weekly_request_budget: optional_u64(value.get("weeklyRequestBudget")),
         })
     }
 }
@@ -430,6 +483,9 @@ fn quota_pressure(used: u64, budget: Option<u64>) -> i64 {
     let Some(budget) = budget else {
         return 0;
     };
+    if budget == 0 {
+        return -1_000;
+    }
     let ratio = used as f64 / budget as f64;
     if ratio >= 0.95 {
         -80
@@ -472,6 +528,14 @@ fn tier_bias(tier: &str) -> i64 {
     }
 }
 
+fn tier_eligible(profile: &ModelProfile, risk: u8, complexity: u8) -> bool {
+    match profile.tier.as_str() {
+        "critical" | "scarce" => risk >= 3 || complexity >= 4,
+        "premium" | "limited" => risk >= 2 || complexity >= 3,
+        _ => true,
+    }
+}
+
 fn role_bias(roles: &[String], task: &str) -> i64 {
     if roles.iter().any(|role| role == task) {
         30
@@ -505,19 +569,11 @@ fn risk_complexity_bias(profile: &ModelProfile, risk: u8, complexity: u8) -> i64
         "critical" | "scarce" => {
             if risk >= 3 {
                 60
-            } else if complexity >= 4 {
+            } else {
                 28
-            } else {
-                -25
             }
         }
-        "premium" | "limited" => {
-            if risk >= 2 || complexity >= 3 {
-                30
-            } else {
-                -12
-            }
-        }
+        "premium" | "limited" => 30,
         _ if risk >= 3 => -8,
         _ => 0,
     }
@@ -555,12 +611,15 @@ fn default_profiles() -> Vec<ModelProfile> {
             72,
             0.30,
         ),
+        // Codex transport context metadata is provider-specific and has historically
+        // exposed 272k variants. Stay conservative instead of assuming the public
+        // API model's larger context applies to this OAuth transport.
         profile(
             "luna",
             "cx/gpt-5.6-luna",
             "high_volume",
             &["scout", "general"],
-            1_050_000,
+            272_000,
             60,
             0.18,
         ),
@@ -569,7 +628,7 @@ fn default_profiles() -> Vec<ModelProfile> {
             "cx/gpt-5.6-sol",
             "limited",
             &["architecture", "security", "debugging"],
-            1_050_000,
+            272_000,
             47,
             0.05,
         ),
@@ -578,7 +637,7 @@ fn default_profiles() -> Vec<ModelProfile> {
             "cx/gpt-6-astra",
             "scarce",
             &["security", "architecture", "debugging"],
-            1_050_000,
+            272_000,
             38,
             0.02,
         ),
@@ -609,7 +668,7 @@ fn profile(
     }
 }
 
-fn estimate_input_tokens(value: &Value) -> u64 {
+pub(crate) fn estimate_input_tokens(value: &Value) -> u64 {
     let chars = estimate_text_chars(value);
     let structure = estimate_structure_units(value);
     ((chars as f64 / 3.5).ceil() as u64)
@@ -619,8 +678,10 @@ fn estimate_input_tokens(value: &Value) -> u64 {
 
 fn estimate_text_chars(value: &Value) -> usize {
     match value {
+        Value::String(text) if is_inline_data(text) => 0,
         Value::String(text) => text.chars().count(),
         Value::Array(values) => values.iter().map(estimate_text_chars).sum(),
+        Value::Object(map) if is_image_object(map) => 0,
         Value::Object(map) => map
             .iter()
             .map(|(key, value)| key.chars().count() + estimate_text_chars(value))
@@ -632,10 +693,32 @@ fn estimate_text_chars(value: &Value) -> usize {
 fn estimate_structure_units(value: &Value) -> u64 {
     match value {
         Value::Array(values) => 2 + values.iter().map(estimate_structure_units).sum::<u64>(),
+        Value::Object(map) if is_image_object(map) => IMAGE_TOKEN_ESTIMATE,
         Value::Object(map) => 4 + map.values().map(estimate_structure_units).sum::<u64>(),
+        Value::String(text) if is_inline_data(text) => IMAGE_TOKEN_ESTIMATE,
         Value::String(_) => 1,
         Value::Null | Value::Bool(_) | Value::Number(_) => 1,
     }
+}
+
+fn is_inline_data(text: &str) -> bool {
+    text.starts_with("data:") && text.contains(";base64,")
+}
+
+fn is_image_object(map: &Map<String, Value>) -> bool {
+    matches!(
+        map.get("type").and_then(Value::as_str),
+        Some("image" | "image_url" | "input_image")
+    ) || map.contains_key("image_url")
+        || map
+            .get("source")
+            .and_then(Value::as_object)
+            .is_some_and(|source| {
+                matches!(
+                    source.get("type").and_then(Value::as_str),
+                    Some("base64" | "url")
+                )
+            })
 }
 
 fn latest_user_text(canonical: &Value) -> String {
@@ -911,8 +994,8 @@ fn string_array(value: Option<&Value>) -> Option<Vec<String>> {
     )
 }
 
-fn positive_u64(value: Option<&Value>) -> Option<u64> {
-    value.and_then(Value::as_u64).filter(|value| *value > 0)
+fn optional_u64(value: Option<&Value>) -> Option<u64> {
+    value.and_then(Value::as_u64)
 }
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
@@ -979,8 +1062,10 @@ mod tests {
             0,
             0.05,
         );
-        assert!(risk_complexity_bias(&profile, 0, 1) < 0);
+        assert!(risk_complexity_bias(&profile, 0, 1) > 0);
         assert!(risk_complexity_bias(&profile, 3, 4) > 0);
+        assert!(!tier_eligible(&profile, 0, 1));
+        assert!(tier_eligible(&profile, 2, 1));
     }
 
     #[test]
@@ -990,5 +1075,58 @@ mod tests {
             .get("enabled")
             .and_then(Value::as_bool)
             .unwrap_or(false));
+    }
+
+    #[test]
+    fn zero_budget_means_disabled_not_unlimited() {
+        assert!(over_budget(0, Some(0)));
+        assert_eq!(quota_pressure(0, Some(0)), -1_000);
+    }
+
+    #[test]
+    fn scarce_models_are_not_easy_task_fallbacks() {
+        let limited = profile(
+            "limited",
+            "provider/limited",
+            "limited",
+            &["general"],
+            1_000_000,
+            1,
+            0.1,
+        );
+        let scarce = profile(
+            "scarce",
+            "provider/scarce",
+            "scarce",
+            &["general"],
+            1_000_000,
+            1,
+            0.1,
+        );
+        assert!(!tier_eligible(&limited, 0, 1));
+        assert!(!tier_eligible(&scarce, 0, 1));
+        assert!(tier_eligible(&limited, 2, 1));
+        assert!(tier_eligible(&scarce, 3, 1));
+    }
+
+    #[test]
+    fn base64_images_do_not_look_like_giant_text_prompts() {
+        let request = json!({
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "image_url",
+                    "image_url": {"url": format!("data:image/png;base64,{}", "A".repeat(2_000_000))}
+                }]
+            }]
+        });
+        assert!(estimate_input_tokens(&request) < 20_000);
+    }
+
+    #[test]
+    fn custom_antigravity_transport_is_not_considered_executable() {
+        assert!(!rust_gateway_supports_provider("antigravity"));
+        assert!(rust_gateway_supports_provider("codebuddy-cn"));
+        assert!(rust_gateway_supports_provider("codex"));
     }
 }
