@@ -44,16 +44,14 @@ jobs:
           )
           replace(
               'rust-backend/src/error.rs',
-              '''            Self::Upstream(_) => (StatusCode::BAD_GATEWAY, "Upstream request failed".into()),
-              Self::Internal(e) => {''',
+              '            Self::Upstream(_) => (StatusCode::BAD_GATEWAY, "Upstream request failed".into()),',
               '''            Self::Upstream(_) | Self::UpstreamHttp { .. } => {
-                  (StatusCode::BAD_GATEWAY, "Upstream request failed".into())
-              }
-              Self::Internal(e) => {'''
+                          (StatusCode::BAD_GATEWAY, "Upstream request failed".into())
+                      }'''
           )
           replace(
               'rust-backend/src/error.rs',
-              '''impl From<rusqlite::Error> for AppError {''',
+              'impl From<rusqlite::Error> for AppError {',
               '''impl AppError {
               pub fn auto_route_retryable(&self) -> bool {
                   match self {
@@ -92,8 +90,8 @@ jobs:
 
           replace(
               'rust-backend/src/auto_router.rs',
-              '''use crate::{error::AppError, providers, state::AppState};''',
-              '''use crate::{error::AppError, providers, state::AppState, translate::Format};'''
+              'use crate::{error::AppError, providers, state::AppState};',
+              'use crate::{error::AppError, providers, state::AppState, translate::Format};'
           )
           replace(
               'rust-backend/src/auto_router.rs',
