@@ -316,13 +316,7 @@ fn rust_gateway_supports_provider(provider: &str) -> bool {
             .get("format")
             .and_then(Value::as_str)
             .unwrap_or("openai"),
-        "openai"
-            | "claude"
-            | "gemini"
-            | "openai-responses"
-            | "responses"
-            | "kiro"
-            | "commandcode"
+        "openai" | "claude" | "gemini" | "openai-responses" | "responses" | "kiro" | "commandcode"
     )
 }
 
