@@ -1,0 +1,42 @@
+name: Harden auto router
+
+on:
+  push:
+    branches:
+      - feature/context-aware-auto-router
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.event.head_commit.message == 'ci: run auto-router hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/context-aware-auto-router
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Apply patch
+        run: python3 ci/harden_auto_router.py
+      - name: Format
+        run: cargo fmt --manifest-path rust-backend/Cargo.toml --all
+      - name: Check
+        run: cargo check --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Test
+        run: cargo test --manifest-path rust-backend/Cargo.toml --all-targets
+      - name: Clippy
+        run: cargo clippy --manifest-path rust-backend/Cargo.toml --all-targets -- -D warnings
+      - name: Commit verified changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add rust-backend/src/providers.rs rust-backend/src/auto_router.rs rust-backend/src/db.rs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'fix: harden auto-router candidate selection [skip ci]'
+          git push origin HEAD:feature/context-aware-auto-router
