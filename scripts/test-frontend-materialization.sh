@@ -37,10 +37,16 @@ if (pkg.scripts?.["cli:pack"] || pkg.scripts?.["cli:publish"]) {
 if (pkg.dependencies?.["monaco-editor"] !== "^0.56.0") {
   throw new Error("materialization did not restore the reviewed dependency manifest");
 }
+if (pkg.overrides?.dompurify !== "3.4.13") {
+  throw new Error("materialization lost the patched DOMPurify override");
+}
 NODE
 
 grep -q 'x-9router-ui-secret' "$TMP/frontend/custom-server.js"
 grep -q 'PUBLIC_API_ROUTES' "$TMP/frontend/src/dashboardGuard.js"
+grep -q 'LOCAL_ONLY_OAUTH_ACTIONS' "$TMP/frontend/src/dashboardGuard.js"
+grep -q '/api/oauth/xiaomi-mimo/auto-import' "$TMP/frontend/src/dashboardGuard.js"
+grep -q 'isLocalOnlyPath' "$TMP/frontend/src/dashboardGuard.js"
 grep -q 'mustChangePassword' "$TMP/frontend/src/app/api/auth/login/route.js"
 grep -q 'INITIAL_PASSWORD' "$TMP/frontend/src/app/api/settings/route.js"
 

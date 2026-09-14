@@ -24,7 +24,7 @@ async function hasValidCliToken(request) {
 const PUBLIC_API_ROUTES = new Set([
   "GET /api/health",
   "GET /api/init",
-  "GET /api/locale",
+  "POST /api/locale",
   "POST /api/auth/login",
   "POST /api/auth/logout",
   "GET /api/auth/status",
@@ -49,6 +49,7 @@ const ALWAYS_PROTECTED = [
   "/api/version/update",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
+  "/api/oauth/xiaomi-mimo/auto-import",
 ];
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.
@@ -58,6 +59,7 @@ const LOCAL_ONLY_PATHS = [
   "/api/tunnel/",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
+  "/api/oauth/xiaomi-mimo/auto-import",
   "/api/auth/reset-password",
   "/api/headroom/",
   "/api/pxpipe/",
@@ -65,6 +67,15 @@ const LOCAL_ONLY_PATHS = [
   "/api/version/shutdown",
   "/api/version/update",
 ];
+
+const LOCAL_ONLY_OAUTH_ACTIONS = new Set([
+  "ide-status",
+  "manual-code",
+  "poll-status",
+  "register-session",
+  "start-proxy",
+  "stop-proxy",
+]);
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -112,8 +123,39 @@ export function isLocalRequest(request) {
   return true;
 }
 
+function canonicalPath(pathname) {
+  if (typeof pathname !== "string" || !pathname.startsWith("/")) throw new Error("Invalid path");
+  if (/%(?![0-9a-f]{2})/i.test(pathname)) throw new Error("Invalid path escape");
+  const path = pathname.replace(/%([0-9a-f]{2})/gi, (escape, hex) => {
+    const byte = Number.parseInt(hex, 16);
+    if (byte < 32 || byte === 127 || byte === 92) throw new Error("Invalid path character");
+    const char = String.fromCharCode(byte);
+    return /[A-Za-z0-9._~-]/.test(char) ? char : escape.toUpperCase();
+  });
+  if (/[\\\x00-\x1f\x7f]/.test(path) || path.includes("//")
+      || path.split("/").some((part) => part === "." || part === "..")) {
+    throw new Error("Ambiguous path");
+  }
+  return path === "/" ? path : path.replace(/\/+$/, "");
+}
+
 function isPublicLlmApi(pathname) {
   return PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+function isLocalOnlyPath(pathname) {
+  const normalized = String(pathname || "").replace(/\/+$/, "") || "/";
+  const matchesStaticPath = LOCAL_ONLY_PATHS.some((prefix) => {
+    const root = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+    return normalized === root || normalized.startsWith(prefix);
+  });
+  if (matchesStaticPath) return true;
+
+  const match = normalized.match(/^\/api\/oauth\/([^/]+)\/([^/]+)$/);
+  if (!match) return false;
+  const [, provider, action] = match;
+  if (LOCAL_ONLY_OAUTH_ACTIONS.has(action)) return true;
+  return provider === "xiaomi-mimo" && (action === "authorize" || action === "exchange");
 }
 
 function extractApiKey(request) {
@@ -170,7 +212,7 @@ async function isAuthenticated(request) {
 }
 
 function isPublicApi(request) {
-  const pathname = request.nextUrl.pathname;
+  const pathname = canonicalPath(request.nextUrl.pathname);
   const method = request.method.toUpperCase();
   if (PUBLIC_API_ROUTES.has(`${method} ${pathname}`)) return true;
   return method === "OPTIONS"
@@ -190,8 +232,10 @@ function requestHostname(request) {
 }
 
 export const __test__ = {
+  canonicalPath,
   isLocalRequest,
   isPublicLlmApi,
+  isLocalOnlyPath,
   extractApiKey,
   canAccessPublicLlmApi,
   canAccessLocalOnlyRoute,
@@ -200,9 +244,16 @@ export const __test__ = {
 };
 
 export async function proxy(request) {
-  const { pathname } = request.nextUrl;
+  let pathname;
+  try {
+    pathname = canonicalPath(request.nextUrl.pathname);
+  } catch {
+    return NextResponse.json({ error: "Invalid or ambiguous request path" }, {
+      status: 400, headers: { "Cache-Control": "no-store" },
+    });
+  }
 
-  if (LOCAL_ONLY_PATHS.some((prefix) => pathname.startsWith(prefix))) {
+  if (isLocalOnlyPath(pathname)) {
     if (!(await canAccessLocalOnlyRoute(request))) {
       return NextResponse.json({ error: "Local only: CLI token required" }, { status: 403 });
     }

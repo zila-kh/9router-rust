@@ -1,0 +1,118 @@
+[
+  {
+    "input": "/",
+    "expected": "/"
+  },
+  {
+    "input": "/api/locale/",
+    "expected": "/api/locale"
+  },
+  {
+    "input": "/api/%6fauth/codex/%73tart-proxy",
+    "expected": "/api/oauth/codex/start-proxy"
+  },
+  {
+    "input": "/%61pi/oauth/xiaomi%2Dmimo/exchange",
+    "expected": "/api/oauth/xiaomi-mimo/exchange"
+  },
+  {
+    "input": "/api/oauth/codex/%73%74%6f%70%2dproxy/",
+    "expected": "/api/oauth/codex/stop-proxy"
+  },
+  {
+    "input": "/api/%73ettings/database",
+    "expected": "/api/settings/database"
+  },
+  {
+    "input": "/api/mcp/",
+    "expected": "/api/mcp"
+  },
+  {
+    "input": "/v1beta/models/vendor%2fmodel:generateContent",
+    "expected": "/v1beta/models/vendor%2Fmodel:generateContent"
+  },
+  {
+    "input": "/api/models/a%20b",
+    "expected": "/api/models/a%20b"
+  },
+  {
+    "input": "/api/models/%E1%9E%81",
+    "expected": "/api/models/%E1%9E%81"
+  },
+  {
+    "input": "/api/models/%2573",
+    "expected": "/api/models/%2573"
+  },
+  {
+    "input": "/api/models/a%3fb%23c",
+    "expected": "/api/models/a%3Fb%23c"
+  },
+  {
+    "input": "/api/models/a.b~c_d-9",
+    "expected": "/api/models/a.b~c_d-9"
+  },
+  {
+    "input": "/api/../api/settings",
+    "error": true
+  },
+  {
+    "input": "/safe/%2e%2e/api/settings",
+    "error": true
+  },
+  {
+    "input": "/api/./health",
+    "error": true
+  },
+  {
+    "input": "/api/%2E/health",
+    "error": true
+  },
+  {
+    "input": "//api/settings",
+    "error": true
+  },
+  {
+    "input": "/api//settings",
+    "error": true
+  },
+  {
+    "input": "/api/health//",
+    "error": true
+  },
+  {
+    "input": "/api/oauth/codex/%",
+    "error": true
+  },
+  {
+    "input": "/api/oauth/codex/%7",
+    "error": true
+  },
+  {
+    "input": "/api/oauth/codex/%gg",
+    "error": true
+  },
+  {
+    "input": "/api/%5csettings",
+    "error": true
+  },
+  {
+    "input": "/api/\\settings",
+    "error": true
+  },
+  {
+    "input": "/api/%00settings",
+    "error": true
+  },
+  {
+    "input": "/api/%0d%0asettings",
+    "error": true
+  },
+  {
+    "input": "/api/%7fsettings",
+    "error": true
+  },
+  {
+    "input": "api/health",
+    "error": true
+  }
+]

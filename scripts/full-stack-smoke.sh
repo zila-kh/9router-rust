@@ -24,6 +24,24 @@ request login_page "$BASE/login"
 grep -Eqi '<!doctype html|<html' "$TMP/login_page.body"
 ! grep -qi 'x-9router-runtime: legacy-bridge' "$TMP/login_page.headers"
 
+# Locale selection is available on the login page, so its actual POST method must
+# be public before authentication and must return the locale cookie through Rust.
+request locale_set \
+  --cookie-jar "$TMP/locale-cookies" \
+  --header 'content-type: application/json' \
+  --data '{"locale":"en"}' \
+  "$BASE/api/locale"
+grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$TMP/locale_set.body"
+grep -Eq '"locale"[[:space:]]*:[[:space:]]*"en"' "$TMP/locale_set.body"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/locale_set.headers"
+grep -Eqi '^set-cookie:.*locale=en' "$TMP/locale_set.headers"
+
+locale_get_status="$(curl --silent --show-error \
+  --output "$TMP/locale-get.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/locale")"
+[[ "$locale_get_status" == 401 ]]
+
 # Public auth redirects must pass through unchanged rather than being followed by
 # Rust's HTTP client. The forwarded host also has to remain the public Rust origin.
 oidc_status="$(curl --silent --show-error \
@@ -57,6 +75,58 @@ grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/login.headers"
 request auth_status --cookie "$TMP/cookies" "$BASE/api/auth/status"
 grep -Eq '"authenticated"[[:space:]]*:[[:space:]]*true' "$TMP/auth_status.body"
 grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/auth_status.headers"
+
+# An authenticated dashboard session reached through a reverse-proxy hop must not
+# gain access to host-local credential import or callback-server controls.
+remote_xiaomi_status="$(curl --silent --show-error \
+  --cookie "$TMP/cookies" \
+  --header 'x-forwarded-for: 198.51.100.23' \
+  --dump-header "$TMP/remote-xiaomi.headers" \
+  --output "$TMP/remote-xiaomi.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/oauth/xiaomi-mimo/auto-import")"
+[[ "$remote_xiaomi_status" == 403 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/remote-xiaomi.headers"
+
+remote_proxy_status="$(curl --silent --show-error \
+  --cookie "$TMP/cookies" \
+  --header 'x-forwarded-for: 198.51.100.23' \
+  --dump-header "$TMP/remote-proxy.headers" \
+  --output "$TMP/remote-proxy.body" \
+  --write-out '%{http_code}' \
+  "$BASE/api/oauth/codex/start-proxy?app_port=20128")"
+[[ "$remote_proxy_status" == 403 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/remote-proxy.headers"
+
+# Alternate spellings must be checked by Rust before reaching Next's dynamic routes.
+for endpoint in \
+  /api/oauth/codex/%73tart-proxy \
+  /%61pi/oauth/xiaomi%2dmimo/exchange \
+  /api/mcp \
+  /api/tunnel/; do
+  status="$(curl --path-as-is --silent --show-error \
+    --cookie "$TMP/cookies" --header 'x-forwarded-for: 198.51.100.23' \
+    --dump-header "$TMP/encoded-local.headers" --output "$TMP/encoded-local.body" \
+    --write-out '%{http_code}' "$BASE$endpoint")"
+  [[ "$status" == 403 ]]
+  grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/encoded-local.headers"
+done
+for endpoint in /safe/../api/settings /safe/%2e%2e/api/settings /api//settings /api/%GG; do
+  status="$(curl --path-as-is --silent --show-error \
+    --cookie "$TMP/cookies" --dump-header "$TMP/ambiguous.headers" \
+    --output "$TMP/ambiguous.body" --write-out '%{http_code}' "$BASE$endpoint")"
+  [[ "$status" == 400 ]]
+  grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/ambiguous.headers"
+done
+
+# Remote-safe, user-supplied token import instructions remain available to an
+# authenticated remote dashboard, proving the local-only matcher is not broad.
+request cursor_import_remote \
+  --cookie "$TMP/cookies" \
+  --header 'x-forwarded-for: 198.51.100.23' \
+  "$BASE/api/oauth/cursor/import"
+grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/cursor_import_remote.headers"
+grep -Eq '"method"[[:space:]]*:[[:space:]]*"import_token"' "$TMP/cursor_import_remote.body"
 
 # SSO diagnostics must stay protected even though browser login/callback endpoints
 # are public. This guards against an overly broad /api/auth/{oidc,saml}/ prefix.

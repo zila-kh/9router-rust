@@ -177,6 +177,7 @@ fn is_public(method: &Method, path: &str) -> bool {
         ("GET", "/api/health")
             | ("GET", "/api/init")
             | ("GET", "/api/version")
+            | ("POST", "/api/locale")
             | ("POST", "/api/auth/login")
             | ("POST", "/api/auth/logout")
             | ("GET", "/api/auth/status")
@@ -210,6 +211,7 @@ async fn dispatch(
             StatusCode::OK,
             json!({"version":env!("CARGO_PKG_VERSION"),"name":"9router-rust","rustBackend":true,"upstreamVersion":"0.5.75"}),
         ),
+        ("POST", "/api/locale") => locale_update(body),
         ("GET", "/api/rust/parity") => json_response(
             StatusCode::OK,
             serde_json::from_str(include_str!("../parity/routes.json"))?,
@@ -252,7 +254,6 @@ async fn dispatch(
             json!({"models":state.db.kv_all("customModels")?.into_values().collect::<Vec<_>>()}),
         ),
         ("POST", "/api/models/custom") => custom_model_post(state, body),
-        ("POST", "/api/locale") => crate::models_mgmt::handle_locale(method, &body),
         ("GET", "/api/models/availability") | ("POST", "/api/models/availability") => {
             crate::models_mgmt::handle_models_availability(state, method, &body)
         }
@@ -1454,4 +1455,68 @@ fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, App
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(r)
+}
+
+const SUPPORTED_LOCALES: &[&str] = &[
+    "en", "vi", "zh-CN", "zh-TW", "ja", "pt-BR", "pt-PT", "ko", "es", "de", "fr", "he", "ar", "ru",
+    "pl", "cs", "nl", "tr", "uk", "tl", "id", "km", "th", "hi", "bn", "ur", "ro", "sv", "it", "el",
+    "hu", "fi", "da", "no", "fa",
+];
+
+fn locale_update(body: Value) -> Result<Response<Body>, AppError> {
+    let locale = body
+        .get("locale")
+        .and_then(Value::as_str)
+        .filter(|locale| SUPPORTED_LOCALES.contains(locale))
+        .ok_or_else(|| AppError::BadRequest("Invalid locale".into()))?;
+    let mut response =
+        json_response_no_store(StatusCode::OK, json!({"success":true,"locale":locale}))?;
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&format!(
+            "locale={locale}; Path=/; Max-Age=31536000; SameSite=Lax"
+        ))
+        .map_err(|error| AppError::Internal(error.into()))?,
+    );
+    Ok(response)
+}
+
+#[cfg(test)]
+mod locale_release_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn every_supported_locale_sets_cookie_without_login() {
+        assert!(is_public(&Method::POST, "/api/locale"));
+        assert!(!is_public(&Method::GET, "/api/locale"));
+        for locale in SUPPORTED_LOCALES {
+            let response = locale_update(json!({"locale":locale})).unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(
+                response.headers()[header::SET_COOKIE].to_str().unwrap(),
+                format!("locale={locale}; Path=/; Max-Age=31536000; SameSite=Lax")
+            );
+            let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body, json!({"success":true,"locale":locale}));
+        }
+    }
+
+    #[test]
+    fn invalid_locale_values_are_bad_requests() {
+        for body in [
+            json!({}),
+            json!(null),
+            json!([]),
+            json!({"locale":null}),
+            json!({"locale":123}),
+            json!({"locale":""}),
+            json!({"locale":"xx"}),
+            json!({"locale":"en; auth_token=bad"}),
+            json!({"locale":"en\r\nX-Test: bad"}),
+        ] {
+            assert!(matches!(locale_update(body), Err(AppError::BadRequest(_))));
+        }
+    }
 }

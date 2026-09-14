@@ -33,6 +33,7 @@ mod protocol;
 mod providers;
 mod providers_oauth;
 mod remaining_infra;
+mod request_path;
 mod special;
 mod state;
 mod streaming;

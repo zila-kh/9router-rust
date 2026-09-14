@@ -23,6 +23,7 @@ const ALWAYS_PROTECTED_PREFIXES: &[&str] = &[
     "/api/version/update",
     "/api/oauth/cursor/auto-import",
     "/api/oauth/kiro/auto-import",
+    "/api/oauth/xiaomi-mimo/auto-import",
 ];
 
 const LOCAL_ONLY_PREFIXES: &[&str] = &[
@@ -31,12 +32,22 @@ const LOCAL_ONLY_PREFIXES: &[&str] = &[
     "/api/tunnel/",
     "/api/oauth/cursor/auto-import",
     "/api/oauth/kiro/auto-import",
+    "/api/oauth/xiaomi-mimo/auto-import",
     "/api/auth/reset-password",
     "/api/headroom/",
     "/api/pxpipe/",
     "/api/shutdown",
     "/api/version/shutdown",
     "/api/version/update",
+];
+
+const LOCAL_ONLY_OAUTH_ACTIONS: &[&str] = &[
+    "ide-status",
+    "manual-code",
+    "poll-status",
+    "register-session",
+    "start-proxy",
+    "stop-proxy",
 ];
 
 pub fn router(state: AppState) -> Router {
@@ -49,8 +60,18 @@ pub fn router(state: AppState) -> Router {
 async fn entry(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request<Body>,
+    mut req: Request<Body>,
 ) -> Response<Body> {
+    match crate::request_path::canonical_uri(req.uri()) {
+        Ok(uri) => *req.uri_mut() = uri,
+        Err(error) => {
+            let mut response = error.into_response();
+            response
+                .headers_mut()
+                .insert("x-9router-runtime", HeaderValue::from_static("rust"));
+            return response;
+        }
+    }
     let path = req.uri().path().to_string();
     let is_compat_media = state.config.compat_api_enabled && compat_media::is_path(&path);
     let is_backend = is_compat_media
@@ -208,7 +229,7 @@ fn is_public_management_request(method: &Method, path: &str) -> bool {
         (method.as_str(), path),
         ("GET", "/api/init")
             | ("GET", "/api/version")
-            | ("GET", "/api/locale")
+            | ("POST", "/api/locale")
             | ("GET", "/api/settings/require-login")
             | ("POST", "/api/auth/login")
             | ("POST", "/api/auth/logout")
@@ -227,10 +248,29 @@ fn is_always_protected_path(path: &str) -> bool {
         .any(|prefix| path.starts_with(prefix))
 }
 
+fn is_local_oauth_action(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    let Some(rest) = path.strip_prefix("/api/oauth/") else {
+        return false;
+    };
+    let mut segments = rest.split('/');
+    let (Some(provider), Some(action), None) = (segments.next(), segments.next(), segments.next())
+    else {
+        return false;
+    };
+    if provider.is_empty() || action.is_empty() {
+        return false;
+    }
+
+    LOCAL_ONLY_OAUTH_ACTIONS.contains(&action)
+        || (provider == "xiaomi-mimo" && matches!(action, "authorize" | "exchange"))
+}
+
 fn is_local_only_path(path: &str) -> bool {
     LOCAL_ONLY_PREFIXES
         .iter()
-        .any(|prefix| path.starts_with(prefix))
+        .any(|prefix| path == prefix.trim_end_matches('/') || path.starts_with(prefix))
+        || is_local_oauth_action(path)
 }
 
 fn strict_metadata_response(path: &str) -> Option<Response<Body>> {
@@ -305,6 +345,8 @@ mod tests {
             &Method::POST,
             "/api/auth/saml/acs"
         ));
+        assert!(is_public_management_request(&Method::POST, "/api/locale"));
+        assert!(!is_public_management_request(&Method::GET, "/api/locale"));
         assert!(!is_public_management_request(
             &Method::POST,
             "/api/auth/oidc/test"
@@ -335,12 +377,41 @@ mod tests {
     fn sensitive_route_classes_are_preserved() {
         assert!(is_always_protected_path("/api/settings/database"));
         assert!(is_always_protected_path("/api/version/update/check"));
+        assert!(is_always_protected_path(
+            "/api/oauth/xiaomi-mimo/auto-import"
+        ));
         assert!(is_local_only_path("/api/headroom/start"));
         assert!(is_local_only_path("/api/headroom/status"));
         assert!(is_local_only_path("/api/pxpipe/logs"));
         assert!(is_local_only_path("/api/cli-tools/codex-settings"));
         assert!(is_local_only_path("/api/mcp/tools"));
+        assert!(is_local_only_path("/api/oauth/xiaomi-mimo/auto-import"));
         assert!(!is_local_only_path("/api/providers"));
+    }
+
+    #[test]
+    fn local_oauth_host_actions_are_exact_and_trailing_slash_safe() {
+        for path in [
+            "/api/oauth/codex/start-proxy",
+            "/api/oauth/codex/start-proxy/",
+            "/api/oauth/xai/manual-code",
+            "/api/oauth/trae/register-session",
+            "/api/oauth/windsurf/poll-status",
+            "/api/oauth/zed/ide-status",
+            "/api/oauth/xiaomi-mimo/authorize",
+            "/api/oauth/xiaomi-mimo/exchange",
+        ] {
+            assert!(is_local_only_path(path), "{path}");
+        }
+        for path in [
+            "/api/oauth/github/device-code",
+            "/api/oauth/github/poll",
+            "/api/oauth/codex/exchange",
+            "/api/oauth/xiaomi-mimo/api-key",
+            "/api/oauth/codex/start-proxy/extra",
+        ] {
+            assert!(!is_local_only_path(path), "{path}");
+        }
     }
 
     #[test]
@@ -350,5 +421,125 @@ mod tests {
         assert_eq!(init.status(), StatusCode::OK);
         assert_eq!(version.status(), StatusCode::OK);
         assert!(strict_metadata_response("/api/providers").is_none());
+    }
+}
+
+#[cfg(test)]
+mod release_review_tests {
+    use super::*;
+    use crate::{config::Config, db::Db};
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    fn test_state(compat: bool) -> (tempfile::TempDir, AppState) {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.sqlite");
+        let db = Db::open(&db_path).unwrap();
+        db.update_settings(json!({"requireLogin":false,"requireApiKey":false}))
+            .unwrap();
+        let config = Config {
+            listen: "127.0.0.1:20128".parse().unwrap(),
+            ui_origin: "http://127.0.0.1:1".into(),
+            data_dir: temp.path().to_path_buf(),
+            db_path,
+            upstream_timeout_secs: 1,
+            ui_only_header_secret: "test-internal-secret".into(),
+            legacy_backend_origin: None,
+            compat_api_enabled: compat,
+        };
+        (temp, AppState::new(config, db).unwrap())
+    }
+
+    fn request(path: &str, body: &str, remote: bool) -> Request<Body> {
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let peer: SocketAddr = if remote {
+            "203.0.113.7:1234"
+        } else {
+            "127.0.0.1:1234"
+        }
+        .parse()
+        .unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer));
+        req
+    }
+
+    #[tokio::test]
+    async fn encoded_local_actions_never_reach_compatibility_proxy() {
+        let (_temp, state) = test_state(true);
+        for path in [
+            "/api/oauth/codex/%73tart-proxy",
+            "/%61pi/oauth/xiaomi%2dmimo/exchange",
+            "/api/oauth/codex/%70oll-status",
+            "/api/mcp",
+            "/api/mcp/",
+            "/api/tunnel",
+        ] {
+            let response = router(state.clone())
+                .oneshot(request(path, "{}", true))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+            assert_eq!(response.headers()["x-9router-runtime"], "rust");
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiguous_paths_are_rejected_before_ui_forwarding() {
+        let (_temp, state) = test_state(true);
+        for path in [
+            "/safe/../api/settings",
+            "/safe/%2e%2e/api/settings",
+            "/api//settings",
+            "/api/%5Csettings",
+            "/api/%GG",
+        ] {
+            let response = router(state.clone())
+                .oneshot(request(path, "{}", true))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_json_types_return_400_without_panicking() {
+        let (_temp, state) = test_state(false);
+        for path in [
+            "/v1beta/models/test:generateContent",
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses",
+        ] {
+            for body in ["null", "[]", "123", "true", "\"string\"", "{"] {
+                let response = router(state.clone())
+                    .oneshot(request(path, body, false))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}: {body}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_locale_route_works_through_the_real_router_before_login() {
+        let (_temp, state) = test_state(false);
+        state
+            .db
+            .update_settings(json!({"requireLogin":true}))
+            .unwrap();
+        let response = router(state)
+            .oneshot(request("/api/locale/", r#"{"locale":"km"}"#, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .starts_with("locale=km;"));
     }
 }

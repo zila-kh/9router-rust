@@ -7,11 +7,20 @@ PUBLIC_PORT="${PORT:-20130}"
 UI_PORT="${NINEROUTER_UI_PORT:-20129}"
 UI_HOST="127.0.0.1"
 RUST_BIN="${NINEROUTER_RUST_BIN:-$ROOT/rust-backend/target/release/9router-rust}"
-for command in cargo npm node curl; do
+for command in cargo npm node curl python3; do
   command -v "$command" >/dev/null || { echo "error: $command not found" >&2; exit 127; }
 done
 if [[ ! "$UI_PORT" =~ ^[0-9]+$ ]] || (( 10#$UI_PORT < 1 || 10#$UI_PORT > 65535 )); then
   echo "error: invalid NINEROUTER_UI_PORT: $UI_PORT" >&2
+  exit 2
+fi
+
+if [[ ! "$PUBLIC_PORT" =~ ^[0-9]+$ ]] || (( 10#$PUBLIC_PORT < 1 || 10#$PUBLIC_PORT > 65535 )); then
+  echo "error: invalid PORT: $PUBLIC_PORT" >&2
+  exit 2
+fi
+if (( 10#$PUBLIC_PORT == 10#$UI_PORT )); then
+  echo 'error: PORT and NINEROUTER_UI_PORT must be different' >&2
   exit 2
 fi
 
@@ -24,15 +33,10 @@ export NEXT_TELEMETRY_DISABLED=${NEXT_TELEMETRY_DISABLED:-1}
 export PORT="$PUBLIC_PORT"
 unset NINEROUTER_LEGACY_BACKEND_ORIGIN LEGACY_BACKEND_ORIGIN NINEROUTER_UI_SECRET
 
-if [[ -n "${NINEROUTER_DATA_DIR:-}" && -n "${DATA_DIR:-}" && "$NINEROUTER_DATA_DIR" != "$DATA_DIR" ]]; then
-  echo 'error: NINEROUTER_DATA_DIR and DATA_DIR must point to the same directory' >&2
-  exit 2
-fi
-if [[ -n "${NINEROUTER_DATA_DIR:-}" ]]; then
-  export DATA_DIR="$NINEROUTER_DATA_DIR"
-elif [[ -n "${DATA_DIR:-}" ]]; then
-  export NINEROUTER_DATA_DIR="$DATA_DIR"
-fi
+# Normalize once before Rust and Next start from different working directories.
+storage_exports="$(python3 "$ROOT/scripts/normalize-storage-paths.py")"
+eval "$storage_exports"
+unset storage_exports
 
 bash "$ROOT/scripts/materialize-frontend.sh" "$FRONTEND_DIR"
 if [[ ! -f "$FRONTEND_DIR/.next/standalone/custom-server.js" ]]; then

@@ -6,6 +6,8 @@ command -v cargo >/dev/null || { echo 'error: cargo not found' >&2; exit 127; }
 command -v npm >/dev/null || { echo 'error: npm not found' >&2; exit 127; }
 command -v node >/dev/null || { echo 'error: node not found' >&2; exit 127; }
 python3 ./scripts/static-audit.py
+node ./scripts/test-release-boundaries.mjs
+python3 ./scripts/test-storage-paths.py
 for script in ./scripts/run-dev.sh ./scripts/run-prod.sh ./scripts/materialize-frontend.sh; do
   bash -n "$script"
 done
