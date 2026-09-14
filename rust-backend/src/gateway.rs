@@ -10,8 +10,7 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use crate::{
-    auth,
-    auto_router,
+    auth, auto_router,
     error::AppError,
     providers,
     state::AppState,

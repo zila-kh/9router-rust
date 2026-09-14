@@ -358,10 +358,7 @@ impl ModelProfile {
                 .and_then(Value::as_u64)
                 .unwrap_or(262_144)
                 .max(16_384),
-            base_score: value
-                .get("baseScore")
-                .and_then(Value::as_i64)
-                .unwrap_or(50),
+            base_score: value.get("baseScore").and_then(Value::as_i64).unwrap_or(50),
             target_share: value
                 .get("targetShare")
                 .and_then(Value::as_f64)
