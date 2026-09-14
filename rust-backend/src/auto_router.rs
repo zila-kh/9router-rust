@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{error::AppError, providers, state::AppState};
+use crate::{error::AppError, providers, state::AppState, translate::Format};
 
 const ROUTER_VERSION: &str = "2";
 const DEFAULT_LARGE_CONTEXT_TOKENS: u64 = 160_000;
@@ -269,6 +269,52 @@ pub fn remember_success(plan: &RoutePlan, model: &str) {
                 touched: Instant::now(),
             },
         );
+    }
+}
+
+pub fn record_stream_estimate_if_passthrough(
+    state: &AppState,
+    plan: &RoutePlan,
+    target: &str,
+    caller: Format,
+    wants_stream: bool,
+) {
+    if !wants_stream {
+        return;
+    }
+    let Ok(resolved) = providers::resolve_model(state, target) else {
+        return;
+    };
+    let transport = providers::transport(&resolved.provider);
+    let transport_format = transport
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or("openai");
+    if matches!(
+        transport_format,
+        "kiro" | "commandcode" | "cursor" | "windsurf"
+    ) {
+        return;
+    }
+    if caller != Format::from_provider(transport_format) {
+        return;
+    }
+
+    let prompt = plan.estimated_input_tokens.min(i64::MAX as u64) as i64;
+    if let Err(error) = state.db.usage_record(
+        Some(&resolved.provider),
+        Some(&resolved.model),
+        None,
+        "auto-router:stream-estimate",
+        prompt,
+        0,
+        "stream_estimate",
+        &json!({
+            "estimated": true,
+            "reason": "native pass-through streams do not expose final usage before the response is returned"
+        }),
+    ) {
+        tracing::warn!(error = %error, model = %target, "failed to record auto-router stream usage estimate");
     }
 }
 

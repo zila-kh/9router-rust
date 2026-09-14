@@ -108,6 +108,13 @@ pub async fn handle(
         {
             Ok(mut resp) => {
                 if let Some(plan) = auto_plan.as_ref() {
+                    auto_router::record_stream_estimate_if_passthrough(
+                        &state,
+                        plan,
+                        &target,
+                        caller,
+                        wants_stream,
+                    );
                     auto_router::remember_success(plan, &target);
                     auto_router::annotate_response(&mut resp, plan, &target);
                 }
@@ -115,6 +122,10 @@ pub async fn handle(
             }
             Err(e) => {
                 tracing::warn!(model=%target, error=%e, "model candidate failed");
+                if auto_plan.is_some() && !e.auto_route_retryable() {
+                    tracing::warn!(model=%target, "auto-router stopped fallback on non-retryable error");
+                    return Err(e);
+                }
                 last_error = Some(e);
             }
         }
@@ -344,11 +355,14 @@ async fn execute_connection(
             &format!("http_{}", status.as_u16()),
             &json!({"error":text,"durationMs":started.elapsed().as_millis()}),
         );
-        return Err(AppError::Upstream(format!(
-            "{provider} returned HTTP {}: {}",
-            status.as_u16(),
-            truncate(&text, 2048)
-        )));
+        return Err(AppError::UpstreamHttp {
+            status: status.as_u16(),
+            message: format!(
+                "{provider} returned HTTP {}: {}",
+                status.as_u16(),
+                truncate(&text, 2048)
+            ),
+        });
     }
 
     if wants_stream && caller == provider_format && upstream_stream {

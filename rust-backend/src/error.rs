@@ -17,6 +17,8 @@ pub enum AppError {
     NotFound(String),
     #[error("upstream error: {0}")]
     Upstream(String),
+    #[error("upstream HTTP {status}: {message}")]
+    UpstreamHttp { status: u16, message: String },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -30,7 +32,9 @@ impl IntoResponse for AppError {
             Self::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             // Upstream strings may contain credential-bearing URLs or provider
             // response bodies. Never return these details to a public API user.
-            Self::Upstream(_) => (StatusCode::BAD_GATEWAY, "Upstream request failed".into()),
+            Self::Upstream(_) | Self::UpstreamHttp { .. } => {
+                (StatusCode::BAD_GATEWAY, "Upstream request failed".into())
+            }
             Self::Internal(e) => {
                 tracing::error!(error=?e, "internal error");
                 (
@@ -45,6 +49,22 @@ impl IntoResponse for AppError {
             axum::http::HeaderValue::from_static("no-store"),
         );
         response
+    }
+}
+
+impl AppError {
+    pub fn auto_route_retryable(&self) -> bool {
+        match self {
+            Self::Upstream(_) => true,
+            Self::UpstreamHttp { status, .. } => {
+                matches!(*status, 408 | 409 | 425 | 429 | 500..=599)
+            }
+            Self::BadRequest(_)
+            | Self::Unauthorized
+            | Self::Forbidden(_)
+            | Self::NotFound(_)
+            | Self::Internal(_) => false,
+        }
     }
 }
 
@@ -68,6 +88,32 @@ impl From<serde_json::Error> for AppError {
 mod release_error_tests {
     use super::*;
     use axum::{body::to_bytes, http::header};
+
+    #[test]
+    fn auto_route_only_retries_transient_upstream_failures() {
+        assert!(AppError::Upstream("network timeout".into()).auto_route_retryable());
+        assert!(AppError::UpstreamHttp {
+            status: 429,
+            message: "rate limited".into()
+        }
+        .auto_route_retryable());
+        assert!(AppError::UpstreamHttp {
+            status: 503,
+            message: "capacity".into()
+        }
+        .auto_route_retryable());
+        assert!(!AppError::UpstreamHttp {
+            status: 400,
+            message: "invalid request".into()
+        }
+        .auto_route_retryable());
+        assert!(!AppError::UpstreamHttp {
+            status: 401,
+            message: "bad auth".into()
+        }
+        .auto_route_retryable());
+        assert!(!AppError::BadRequest("bad request".into()).auto_route_retryable());
+    }
 
     #[tokio::test]
     async fn upstream_failures_do_not_disclose_credentials_or_internal_urls() {
