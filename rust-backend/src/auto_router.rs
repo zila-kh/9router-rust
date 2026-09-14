@@ -128,8 +128,8 @@ pub fn plan_if_requested(
     // The router only needs provider/model token totals. We intentionally consume
     // the existing stats shape for compatibility; this can be replaced by a
     // dedicated aggregate query later without changing routing semantics.
-    let today = state.db.usage_stats("today")?;
-    let week = state.db.usage_stats("7d")?;
+    let today = state.db.usage_route_stats("today")?;
+    let week = state.db.usage_route_stats("7d")?;
     let today_total = total_tokens(&today);
     let mut candidates = Vec::new();
     let mut seen_routes = HashSet::new();
@@ -157,12 +157,28 @@ pub fn plan_if_requested(
         };
 
         if !rust_gateway_supports_provider(&resolved.provider) {
-            tracing::warn!(
+            tracing::debug!(
                 model = %profile.model,
                 provider = %resolved.provider,
                 "auto-router candidate skipped: provider transport is not executable by the native Rust gateway"
             );
             continue;
+        }
+
+        match state
+            .db
+            .provider_connections(Some(&resolved.provider), Some(true))
+        {
+            Ok(connections) if !connections.is_empty() => {}
+            Ok(_) => {
+                tracing::debug!(
+                    model = %profile.model,
+                    provider = %resolved.provider,
+                    "auto-router candidate skipped: no active provider connection"
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
         }
 
         // Multiple aliases/profiles can map to the same provider + upstream model.
@@ -719,15 +735,21 @@ pub(crate) fn estimate_input_tokens(value: &Value) -> u64 {
 fn estimate_text_chars(value: &Value) -> usize {
     match value {
         Value::String(text) if is_inline_data(text) => 0,
-        Value::String(text) => text.chars().count(),
+        Value::String(text) => weighted_text_units(text),
         Value::Array(values) => values.iter().map(estimate_text_chars).sum(),
         Value::Object(map) if is_image_object(map) => 0,
         Value::Object(map) => map
             .iter()
-            .map(|(key, value)| key.chars().count() + estimate_text_chars(value))
+            .map(|(key, value)| weighted_text_units(key) + estimate_text_chars(value))
             .sum(),
         Value::Null | Value::Bool(_) | Value::Number(_) => 0,
     }
+}
+
+fn weighted_text_units(text: &str) -> usize {
+    text.chars()
+        .map(|ch| if ch.is_ascii() { 1 } else { 4 })
+        .sum()
 }
 
 fn estimate_structure_units(value: &Value) -> u64 {
@@ -791,7 +813,7 @@ fn message_text(message: &Value) -> String {
 
 fn classify_task(text: &str) -> String {
     let text = text.to_ascii_lowercase();
-    if contains_any(
+    let task = if contains_any(
         &text,
         &[
             "security",
@@ -826,6 +848,22 @@ fn classify_task(text: &str) -> String {
     } else if contains_any(
         &text,
         &[
+            "bug",
+            "debug",
+            "error",
+            "crash",
+            "panic",
+            "failing",
+            "failed",
+            "traceback",
+            "root cause",
+            "regression",
+        ],
+    ) {
+        "debugging"
+    } else if contains_any(
+        &text,
+        &[
             "test",
             "spec",
             "coverage",
@@ -851,7 +889,7 @@ fn classify_task(text: &str) -> String {
             "component",
             "responsive",
             "accessibility",
-            "ui ",
+            "ui",
         ],
     ) {
         "frontend"
@@ -876,22 +914,6 @@ fn classify_task(text: &str) -> String {
     } else if contains_any(
         &text,
         &[
-            "bug",
-            "debug",
-            "error",
-            "crash",
-            "panic",
-            "failing",
-            "failed",
-            "traceback",
-            "root cause",
-            "regression",
-        ],
-    ) {
-        "debugging"
-    } else if contains_any(
-        &text,
-        &[
             "summarize",
             "search",
             "find",
@@ -906,8 +928,8 @@ fn classify_task(text: &str) -> String {
         "scout"
     } else {
         "general"
-    }
-    .to_string()
+    };
+    task.to_string()
 }
 
 fn risk_score(text: &str, task: &str) -> u8 {
@@ -1039,7 +1061,18 @@ fn optional_u64(value: Option<&Value>) -> Option<u64> {
 }
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| text.contains(needle))
+    needles.iter().any(|needle| contains_term(text, needle))
+}
+
+fn contains_term(text: &str, needle: &str) -> bool {
+    let simple = needle
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.'));
+    if !simple {
+        return text.contains(needle);
+    }
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.')))
+        .any(|token| token == needle)
 }
 
 fn truthy(value: &str) -> bool {
@@ -1161,6 +1194,20 @@ mod tests {
             }]
         });
         assert!(estimate_input_tokens(&request) < 20_000);
+    }
+
+    #[test]
+    fn classifier_does_not_match_keywords_inside_other_words() {
+        assert_eq!(classify_task("Get the latest upstream changes"), "general");
+        assert_eq!(classify_task("Debug the Rust API failure"), "debugging");
+        assert_eq!(classify_task("Review API implementation"), "backend");
+    }
+
+    #[test]
+    fn non_ascii_context_estimation_is_conservative() {
+        let ascii = json!({"messages":[{"role":"user","content":"a".repeat(10_000)}]});
+        let khmer = json!({"messages":[{"role":"user","content":"ក".repeat(10_000)}]});
+        assert!(estimate_input_tokens(&khmer) > estimate_input_tokens(&ascii) * 3);
     }
 
     #[test]

@@ -85,6 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_uh_ts ON usageHistory(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_uh_provider ON usageHistory(provider);
 CREATE INDEX IF NOT EXISTS idx_uh_model ON usageHistory(model);
 CREATE INDEX IF NOT EXISTS idx_uh_conn ON usageHistory(connectionId);
+CREATE INDEX IF NOT EXISTS idx_uh_ts_provider_model ON usageHistory(timestamp, provider, model);
 CREATE TABLE IF NOT EXISTS usageDaily (dateKey TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS requestDetails (
   id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, provider TEXT, model TEXT, connectionId TEXT, status TEXT, data TEXT NOT NULL
@@ -586,6 +587,54 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
             &json!({"prompt_tokens":prompt,"completion_tokens":completion,"total_tokens":prompt+completion}),
         )?;
         self.with_conn(|db|{db.execute("INSERT INTO usageHistory(timestamp,provider,model,connectionId,endpoint,promptTokens,completionTokens,cost,status,tokens,meta) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8,?9,?10)",params![ts,provider,model,connection_id,endpoint,prompt,completion,status,tokens,meta])?;Ok(())})
+    }
+
+    pub fn usage_route_stats(&self, period: &str) -> Result<Value, AppError> {
+        let cutoff = usage_cutoff(period)?;
+        self.with_conn(|db| {
+        let sql = if cutoff.is_some() {
+            "SELECT provider,model,COUNT(*),COALESCE(SUM(promptTokens),0),COALESCE(SUM(completionTokens),0) FROM usageHistory WHERE timestamp>=?1 GROUP BY provider,model"
+        } else {
+            "SELECT provider,model,COUNT(*),COALESCE(SUM(promptTokens),0),COALESCE(SUM(completionTokens),0) FROM usageHistory GROUP BY provider,model"
+        };
+        let mut stmt = db.prepare(sql)?;
+        let mut rows = if let Some(cutoff) = cutoff.as_deref() {
+            stmt.query(params![cutoff])?
+        } else {
+            stmt.query([])?
+        };
+        let mut by_model = Map::new();
+        let mut total_prompt = 0i64;
+        let mut total_completion = 0i64;
+        while let Some(row) = rows.next()? {
+            let provider: Option<String> = row.get(0)?;
+            let model: Option<String> = row.get(1)?;
+            let requests: i64 = row.get(2)?;
+            let prompt: i64 = row.get(3)?;
+            let completion: i64 = row.get(4)?;
+            total_prompt += prompt;
+            total_completion += completion;
+            let provider = provider.unwrap_or_default();
+            let model = model.unwrap_or_default();
+            let key = if provider.is_empty() {
+                model.clone()
+            } else {
+                format!("{model}|{provider}")
+            };
+            by_model.insert(key, json!({
+                "requests": requests,
+                "promptTokens": prompt,
+                "completionTokens": completion,
+                "rawModel": model,
+                "provider": provider
+            }));
+        }
+        Ok(json!({
+            "totalPromptTokens": total_prompt,
+            "totalCompletionTokens": total_completion,
+            "byModel": by_model
+        }))
+    })
     }
 
     pub fn usage_stats(&self, period: &str) -> Result<Value, AppError> {
