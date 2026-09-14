@@ -558,7 +558,7 @@ fn context_bias(profile: &ModelProfile, input_tokens: u64, large_context_tokens:
     score
 }
 
-fn risk_complexity_bias(profile: &ModelProfile, risk: u8, complexity: u8) -> i64 {
+fn risk_complexity_bias(profile: &ModelProfile, risk: u8, _complexity: u8) -> i64 {
     match profile.tier.as_str() {
         "critical" | "scarce" => {
             if risk >= 3 {
