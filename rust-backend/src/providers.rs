@@ -93,6 +93,7 @@ pub fn media_config(id: &str, kind: &str) -> Value {
         "image" => "imageConfig",
         "search" => "searchConfig",
         "fetch" => "fetchConfig",
+        "video" => "videoConfig",
         _ => "",
     };
     if key.is_empty() {

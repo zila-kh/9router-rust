@@ -20,7 +20,6 @@ pub fn is_media_path(path: &str) -> bool {
         || p == "/v1/audio/transcriptions"
         || p == "/v1/audio/translations"
         || p.starts_with("/v1/images/")
-        || p.starts_with("/v1/videos")
 }
 
 fn strip_api_prefix(path: &str) -> &str {

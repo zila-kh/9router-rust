@@ -275,7 +275,7 @@ async fn dispatch(
         }
         ("GET", "/api/pricing") => pricing_get(state),
         ("POST", "/api/translator/translate") => translator_translate(state, body),
-        _ => dynamic(state, method, path, body).await,
+        _ => dynamic(state, headers, method, path, body).await,
     }
 }
 
@@ -1155,6 +1155,7 @@ fn pricing_get(state: &AppState) -> Result<Response<Body>, AppError> {
 }
 async fn dynamic(
     state: &AppState,
+    headers: &HeaderMap,
     method: &Method,
     path: &str,
     body: Value,
@@ -1385,7 +1386,7 @@ async fn dynamic(
         return crate::inference_media::handle_v1_web_fetch(state, method, &body).await;
     }
     if path.starts_with("/api/v1/videos") {
-        return crate::inference_media::handle_v1_videos(state, method, path, &body).await;
+        return crate::inference_media::handle_v1_videos(state, method, path, headers, &body).await;
     }
     if path == "/api/v1/api/chat" || path == "/api/v1/route.js" || path == "/api/v1" {
         return crate::inference_media::handle_v1_api_chat(state, method, &body).await;

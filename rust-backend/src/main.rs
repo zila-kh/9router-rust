@@ -48,6 +48,7 @@ mod streaming;
 mod translate;
 mod ui_proxy;
 mod usage_mgmt;
+mod videos_api;
 mod voice_catalog;
 mod web_fetch_api;
 

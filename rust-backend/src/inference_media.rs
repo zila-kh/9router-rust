@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, HeaderValue, Method, Response, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, Response, StatusCode},
 };
 use serde_json::{json, Value};
 
@@ -121,41 +121,16 @@ pub async fn handle_v1_web_fetch(
     crate::web_fetch_api::handle(state, method, &raw).await
 }
 
+/// Internal `/api/v1/videos/**` path. Delegates to the native adapter module so
+/// the public `/v1/videos/**` family and this internal path share one contract.
 pub async fn handle_v1_videos(
-    _state: &AppState,
+    state: &AppState,
     method: &Method,
     path: &str,
-    _body: &Value,
+    headers: &HeaderMap,
+    body: &Value,
 ) -> Result<Response<Body>, AppError> {
-    let sub = path.strip_prefix("/api/v1/videos").unwrap_or("");
-    match method.as_str() {
-        "POST" => {
-            let task_id = uuid::Uuid::new_v4().to_string();
-            json_response(
-                StatusCode::OK,
-                json!({
-                    "id": task_id,
-                    "status": "processing",
-                    "action": sub.trim_matches('/')
-                }),
-            )
-        }
-        "GET" => {
-            let id = sub.trim_matches('/');
-            json_response(
-                StatusCode::OK,
-                json!({
-                    "id": id,
-                    "status": "completed",
-                    "video_url": ""
-                }),
-            )
-        }
-        _ => json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            json!({"error": "Method Not Allowed"}),
-        ),
-    }
+    crate::videos_api::handle_parsed_body(state, method, path, headers, body).await
 }
 
 pub async fn handle_v1_models_info(

@@ -224,9 +224,10 @@ request local_voices "${LLM_AUTH[@]}" "$BASE/v1/audio/voices?provider=local-devi
 grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/local_voices.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/local_voices.body"
 
-# Upstream 0.5.75 added video APIs. A fresh database has no xAI account, so the
-# expected response is an upstream validation/credential error, not Rust's old
-# 404/501 "media route not implemented" response.
+# Upstream 0.5.75 added video APIs, and they are native in every mode. A fresh
+# database has no xAI account, so the expected response is the native
+# "No credentials for provider: xai" 400 — never the upstream-compat passthrough
+# and never Rust's old fabricated job stub.
 video_status="$(curl --silent --show-error \
   "${LLM_AUTH[@]}" \
   --header 'content-type: application/json' \
@@ -235,15 +236,19 @@ video_status="$(curl --silent --show-error \
   --output "$TMP/video.body" \
   --write-out '%{http_code}' \
   "$BASE/v1/videos/generations")"
-grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/video.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/video.headers"
 case "$video_status" in
-  404|421|501)
-    echo "Video compatibility route was not reached (HTTP $video_status)" >&2
+  400) ;;
+  *)
+    echo "Video route was not handled natively (HTTP $video_status)" >&2
     cat "$TMP/video.body" >&2
     exit 1
     ;;
 esac
-! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
+grep -Eq '"message"[[:space:]]*:[[:space:]]*"No credentials for provider: xai"' "$TMP/video.body"
+# The fabricated stub job shape must be gone.
+! grep -Eq '"status"[[:space:]]*:[[:space:]]*"processing"' "$TMP/video.body"
+! grep -q 'video_url' "$TMP/video.body"
 
 # Exercise the actual web-fetch handler with deliberately invalid JSON. A 400
 # from the native handler proves Rust routed the authenticated request without

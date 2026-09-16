@@ -88,6 +88,25 @@ pub async fn handle(
         let headers = req.headers().clone();
         return crate::models_list::handle_models(&state, &method, &path, &headers).await;
     }
+    if is_videos_path(&path) {
+        authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+        let method = req.method().clone();
+        let query = req.uri().query().map(str::to_string);
+        let headers = req.headers().clone();
+        let (_, body) = req.into_parts();
+        let bytes = to_bytes(body, MAX_BODY)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("failed to read request body: {e}")))?;
+        return crate::videos_api::handle(
+            &state,
+            &method,
+            &path,
+            query.as_deref(),
+            &headers,
+            &bytes,
+        )
+        .await;
+    }
     if is_search_path(&path) {
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
         let method = req.method().clone();
@@ -217,6 +236,15 @@ fn is_count_tokens_path(path: &str) -> bool {
         path,
         "/v1/messages/count_tokens" | "/api/v1/messages/count_tokens"
     )
+}
+
+/// `/v1/videos/**` (public) and `/api/v1/videos/**` (internal Next-compat path).
+/// `/v1/videos` must stay out of [`crate::media::is_media_path`] — the media
+/// router is consulted first in `app.rs`.
+fn is_videos_path(path: &str) -> bool {
+    let path = path.strip_prefix("/api").unwrap_or(path);
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+    path == "/videos" || path.starts_with("/videos/") || path.starts_with("/v1/videos")
 }
 
 /// `/v1/search` (public) and `/api/v1/search` (internal Next-compat path).

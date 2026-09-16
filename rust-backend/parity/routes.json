@@ -21,8 +21,7 @@
     "publicApiRoutes": [
       "/v1 and /v1/v1 -> /api/v1",
       "/v1/api/chat -> /api/v1/api/chat",
-      "/v1beta/models/<model> generation -> /api/v1beta/models/**",
-      "/v1/videos/** -> /api/v1/videos/**"
+      "/v1beta/models/<model> generation -> /api/v1beta/models/**"
     ]
   },
   "native": [
@@ -209,7 +208,7 @@
     "Headroom/PXPIPE management endpoints",
     "Tailscale/cloudflared tunnel management",
     "MCP endpoints",
-    "video generation/status/download/cancel routes remain compatibility-only",
+    "video generation/status/extensions/edits are native for the `xai`, `openrouter` and `vertex` adapters; provider-account cooldown bookkeeping (`markAccountUnavailable` test/error fields, model locks, `allRateLimited` answers), `getProviderCredentials` strategy selection (round-robin/fill-first sticky counters, proxy pools, `noAuth` virtual connections) and the `401/403` refresh-and-retry branch (`refreshTokenByProvider`) are not implemented, so the upstream response is surfaced instead of retried",
     "chat-based web search (`searchViaChat` providers: antigravity, gemini, kimi, minimax, openai, perplexity, perplexity-agent, vercel-ai-gateway, xai) is not implemented natively; the 12 dedicated `searchConfig` providers, the 5 `fetchConfig` providers, the SSRF guard and the upstream error envelopes are native",
     "Ollama chat, Gemini-native routes, and Gemini/MiniMax voice listing remain compatibility-only",
     "live per-provider model resolvers: kiro, kimchi, clinepass, cline and grok-cli are ported; qoder, github (Copilot), cursor and zed fall back to the static catalog instead",
