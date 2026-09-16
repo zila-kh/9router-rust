@@ -353,6 +353,7 @@ pub async fn handle_models_test(
         false,
         canonical,
         model,
+        false,
     )
     .await
     {

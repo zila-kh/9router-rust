@@ -28,6 +28,7 @@ mod legacy_proxy;
 mod login_limiter;
 mod management;
 mod media;
+mod model_catalog;
 mod models_mgmt;
 mod ollama;
 mod protocol;
@@ -41,6 +42,7 @@ mod streaming;
 mod translate;
 mod ui_proxy;
 mod usage_mgmt;
+mod voice_catalog;
 
 use anyhow::bail;
 use config::Config;

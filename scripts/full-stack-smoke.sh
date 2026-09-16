@@ -205,17 +205,17 @@ curl --silent --show-error --fail-with-body \
   --dump-header "$TMP/count_tokens.headers" \
   --output "$TMP/count_tokens.body" \
   "$BASE/v1/messages/count_tokens"
-grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/count_tokens.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/count_tokens.headers"
 grep -Eq '"input_tokens"[[:space:]]*:' "$TMP/count_tokens.body"
 
 request gemini_models "${LLM_AUTH[@]}" "$BASE/v1beta/models"
-grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/gemini_models.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/gemini_models.headers"
 grep -Eq '"models"[[:space:]]*:' "$TMP/gemini_models.body"
 
-# local-device returns an empty list on Linux when macOS/Windows speech tools are
-# unavailable, but still exercises the nested secret-authenticated internal fetch.
+# Voice listing is native in every mode. local-device returns an empty list on
+# Linux when macOS/Windows speech tools are unavailable.
 request local_voices "${LLM_AUTH[@]}" "$BASE/v1/audio/voices?provider=local-device"
-grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/local_voices.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/local_voices.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/local_voices.body"
 
 # Upstream 0.5.75 added video APIs. A fresh database has no xAI account, so the

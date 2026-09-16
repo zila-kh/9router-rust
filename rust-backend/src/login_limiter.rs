@@ -174,7 +174,12 @@ mod tests {
 
     #[test]
     fn capacity_cleanup_prefers_stale_then_oldest_unlocked_entries() {
-        let now = Instant::now();
+        // `Instant` is monotonic, and on some platforms (e.g. a freshly booted
+        // Windows machine) `Instant::now()` can sit too close to the clock epoch
+        // for `checked_sub(FAIL_WINDOW + 1s)` to succeed. Anchor a synthetic
+        // "now" far enough ahead of the real instant that every `checked_sub`
+        // below stays above the epoch regardless of machine uptime.
+        let now = Instant::now() + FAIL_WINDOW + Duration::from_secs(60);
         let stale_ip: IpAddr = "198.51.100.1".parse().unwrap();
         let old_ip: IpAddr = "198.51.100.2".parse().unwrap();
         let locked_ip: IpAddr = "198.51.100.3".parse().unwrap();

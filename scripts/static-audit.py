@@ -5,7 +5,7 @@ pairs={')':'(',']':'[','}':'{'}
 failed=False
 paths=list(Path('rust-backend/src').rglob('*.rs'))+[Path('rust-backend/build.rs')]
 for p in paths:
-    s=p.read_text(); stack=[]; i=0; line=1; state='code'; quote=None
+    s=p.read_text(encoding='utf-8'); stack=[]; i=0; line=1; state='code'; quote=None
     while i<len(s):
         c=s[i]; n=s[i+1] if i+1<len(s) else ''
         if c=='\n': line+=1

@@ -113,16 +113,17 @@ pub async fn handle(
     }
     if path.starts_with("/api/media-providers/tts/") {
         let sub = path.strip_prefix("/api/media-providers/tts/").unwrap_or("");
-        return crate::inference_media::handle_media_voices(&state, &method, sub).await;
+        return crate::inference_media::handle_media_voices(&state, &method, sub, uri.query())
+            .await;
     }
     if path == "/api/v1/audio/voices" {
-        return crate::inference_media::handle_v1_audio_voices(&state, &method).await;
+        return crate::inference_media::handle_v1_audio_voices(&state, &method, uri.query()).await;
     }
     if path == "/api/v1/models/info" {
         return crate::inference_media::handle_v1_models_info(&state, &method, uri.query()).await;
     }
     if path.starts_with("/api/v1beta/models") {
-        return crate::inference_media::handle_v1beta_models(&state, &method, &path).await;
+        return crate::inference_media::handle_v1beta_models(&state, &method).await;
     }
     if path == "/api/providers/client" {
         return crate::providers_oauth::handle_providers_client(&state, &method).await;
@@ -1385,9 +1386,6 @@ async fn dynamic(
     }
     if path.starts_with("/api/v1/videos") {
         return crate::inference_media::handle_v1_videos(state, method, path, &body).await;
-    }
-    if path == "/api/v1/responses/compact" {
-        return crate::inference_media::handle_v1_responses_compact(state, method, &body).await;
     }
     if path == "/api/v1/api/chat" || path == "/api/v1/route.js" || path == "/api/v1" {
         return crate::inference_media::handle_v1_api_chat(state, method, &body).await;

@@ -39,6 +39,7 @@ pub async fn handle(
     req: Request<Body>,
 ) -> Result<Response<Body>, AppError> {
     let path = req.uri().path().to_string();
+    let compact = is_responses_compact_path(&path);
     if req.method() == axum::http::Method::OPTIONS {
         return cors_preflight();
     }
@@ -47,13 +48,51 @@ pub async fn handle(
             .find(|(k, _)| k == "key")
             .map(|(_, v)| v.into_owned())
     });
+    if is_count_tokens_path(&path) {
+        authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+        let method = req.method().clone();
+        let (_, body) = req.into_parts();
+        let incoming = if method == axum::http::Method::POST {
+            let bytes = to_bytes(body, MAX_BODY)
+                .await
+                .map_err(|e| AppError::BadRequest(format!("failed to read request body: {e}")))?;
+            serde_json::from_slice(&bytes)
+                .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))?
+        } else {
+            json!({})
+        };
+        return crate::inference_media::handle_count_tokens(&state, &method, &incoming).await;
+    }
+    if is_audio_voices_path(&path) {
+        authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+        let method = req.method().clone();
+        let query = req.uri().query().map(str::to_string);
+        return crate::inference_media::handle_v1_audio_voices(&state, &method, query.as_deref())
+            .await;
+    }
+    if is_models_info_path(&path) {
+        authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+        let method = req.method().clone();
+        let query = req.uri().query().map(str::to_string);
+        return crate::inference_media::handle_v1_models_info(&state, &method, query.as_deref())
+            .await;
+    }
+    if is_v1beta_models_path(&path) {
+        authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+        let method = req.method().clone();
+        return crate::inference_media::handle_v1beta_models(&state, &method).await;
+    }
     if is_models_path(&path) && req.method() == axum::http::Method::GET {
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
         return json_response(StatusCode::OK, providers::all_models_openai());
     }
 
     authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
-    let caller = translate::caller_for_path(&path);
+    let caller = if compact {
+        Format::Responses
+    } else {
+        translate::caller_for_path(&path)
+    };
     let (parts, body) = req.into_parts();
     let bytes = to_bytes(body, MAX_BODY)
         .await
@@ -103,6 +142,7 @@ pub async fn handle(
             wants_stream,
             canonical.clone(),
             &target,
+            compact,
         )
         .await
         {
@@ -145,6 +185,54 @@ pub(crate) fn authorize_llm(
 
 fn is_models_path(path: &str) -> bool {
     matches!(path, "/v1/models" | "/api/v1/models")
+}
+
+fn is_count_tokens_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/messages/count_tokens" | "/api/v1/messages/count_tokens"
+    )
+}
+
+fn is_audio_voices_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/audio/voices"
+            | "/api/v1/audio/voices"
+            | "/v1/v1/audio/voices"
+            | "/api/v1/v1/audio/voices"
+    )
+}
+
+fn is_models_info_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/models/info" | "/api/v1/models/info" | "/v1/v1/models/info" | "/api/v1/v1/models/info"
+    )
+}
+
+fn is_v1beta_models_path(path: &str) -> bool {
+    matches!(path, "/v1beta/models" | "/api/v1beta/models")
+}
+
+fn is_responses_compact_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/responses/compact"
+            | "/api/v1/responses/compact"
+            | "/v1/v1/responses/compact"
+            | "/api/v1/v1/responses/compact"
+    )
+}
+
+/// Upstream `codex.js` sends `/v1/responses/compact` requests to `{base}/compact`;
+/// every other provider ignores the flag and keeps the normal responses URL.
+fn compact_upstream_url(url: String, provider: &str, compact: bool) -> String {
+    if compact && provider == "codex" {
+        format!("{url}/compact")
+    } else {
+        url
+    }
 }
 
 fn gemini_model_from_path(path: &str) -> Option<String> {
@@ -211,8 +299,18 @@ pub async fn execute_target_direct(
     wants_stream: bool,
     canonical: Value,
     target: &str,
+    compact: bool,
 ) -> Result<Response<Body>, AppError> {
-    execute_target(state, headers, caller, wants_stream, canonical, target).await
+    execute_target(
+        state,
+        headers,
+        caller,
+        wants_stream,
+        canonical,
+        target,
+        compact,
+    )
+    .await
 }
 
 async fn execute_target(
@@ -222,6 +320,7 @@ async fn execute_target(
     wants_stream: bool,
     canonical: Value,
     target: &str,
+    compact: bool,
 ) -> Result<Response<Body>, AppError> {
     let resolved = providers::resolve_model(state, target)?;
     let connections = state
@@ -245,6 +344,7 @@ async fn execute_target(
             &resolved.provider,
             &resolved.model,
             connection,
+            compact,
         )
         .await
         {
@@ -269,6 +369,7 @@ async fn execute_connection(
     provider: &str,
     model: &str,
     connection: Value,
+    compact: bool,
 ) -> Result<Response<Body>, AppError> {
     let transport = providers::transport(provider);
     let transport_format = transport
@@ -322,6 +423,7 @@ async fn execute_connection(
 
     let (url, _) = providers::endpoint(provider, &connection, "chat", model)?;
     let url = build_format_url(&url, provider_format, model, upstream_stream);
+    let url = compact_upstream_url(url, provider, compact);
     let req = build_upstream_request(
         state,
         provider,
@@ -555,5 +657,31 @@ fn truncate(s: &str, n: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", s.chars().take(n).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+
+    #[test]
+    fn compact_suffix_only_applies_to_codex_responses_urls() {
+        let url = "https://chatgpt.com/backend-api/codex/responses".to_string();
+        assert_eq!(
+            compact_upstream_url(url.clone(), "codex", true),
+            "https://chatgpt.com/backend-api/codex/responses/compact"
+        );
+        assert_eq!(compact_upstream_url(url.clone(), "codex", false), url);
+        assert_eq!(
+            compact_upstream_url("https://api.openai.com/v1/responses".into(), "openai", true),
+            "https://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn compact_paths_are_recognized() {
+        assert!(is_responses_compact_path("/v1/responses/compact"));
+        assert!(is_responses_compact_path("/api/v1/responses/compact"));
+        assert!(!is_responses_compact_path("/v1/responses"));
     }
 }

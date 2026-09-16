@@ -3,63 +3,86 @@ use axum::{
     http::{header, HeaderValue, Method, Response, StatusCode},
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 use crate::{error::AppError, state::AppState};
 
 pub async fn handle_media_voices(
-    _state: &AppState,
+    state: &AppState,
     method: &Method,
     subpath: &str,
+    query: Option<&str>,
 ) -> Result<Response<Body>, AppError> {
-    if method != Method::GET {
-        return json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            json!({"error": "Method Not Allowed"}),
-        );
-    }
-    let catalog = crate::providers::catalog();
-    let media_catalog = catalog.get("media").and_then(Value::as_object);
-    let tts = media_catalog
-        .and_then(|m| m.get("tts"))
-        .and_then(Value::as_object);
-
-    let provider = subpath.trim_matches('/').split('/').next().unwrap_or("");
-    if !provider.is_empty() && provider != "voices" {
-        let voices = tts
-            .and_then(|t| t.get(provider))
-            .and_then(|p| p.get("voices"))
-            .cloned()
-            .unwrap_or_else(|| json!([]));
-        return json_response(StatusCode::OK, json!({ "voices": voices }));
-    }
-
-    let all_voices = tts
-        .map(|t| {
-            let mut list = Vec::new();
-            for (p_name, p_val) in t {
-                if let Some(v_arr) = p_val.get("voices").and_then(Value::as_array) {
-                    for v in v_arr {
-                        let mut item = v.clone();
-                        if let Some(obj) = item.as_object_mut() {
-                            obj.insert("provider".into(), json!(p_name));
-                        }
-                        list.push(item);
-                    }
-                }
-            }
-            Value::Array(list)
-        })
-        .unwrap_or_else(|| json!([]));
-
-    json_response(StatusCode::OK, json!({ "voices": all_voices }))
+    crate::voice_catalog::handle_internal(state, method, subpath, query).await
 }
 
 pub async fn handle_v1_audio_voices(
     state: &AppState,
     method: &Method,
+    query: Option<&str>,
 ) -> Result<Response<Body>, AppError> {
-    handle_media_voices(state, method, "voices").await
+    crate::voice_catalog::handle_public(state, method, query).await
+}
+
+fn count_value_chars(value: &Value) -> usize {
+    match value {
+        Value::Null => 0,
+        Value::String(s) => s.chars().count(),
+        Value::Number(n) => n.to_string().chars().count(),
+        Value::Bool(b) => b.to_string().chars().count(),
+        Value::Array(items) => items.iter().map(count_value_chars).sum(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| k.chars().count() + count_value_chars(v))
+            .sum(),
+    }
+}
+
+fn count_content_block_chars(block: &Value) -> usize {
+    let Some(obj) = block.as_object() else {
+        return count_value_chars(block);
+    };
+    match obj.get("type").and_then(Value::as_str) {
+        Some("text") => count_value_chars(obj.get("text").unwrap_or(&Value::Null)),
+        Some("tool_use") => {
+            count_value_chars(obj.get("name").unwrap_or(&Value::Null))
+                + count_value_chars(obj.get("input").unwrap_or(&Value::Null))
+        }
+        Some("tool_result") => count_value_chars(obj.get("content").unwrap_or(&Value::Null)),
+        Some("thinking") => count_value_chars(obj.get("thinking").unwrap_or(&Value::Null)),
+        _ => count_value_chars(block),
+    }
+}
+
+fn count_message_chars(message: &Value) -> usize {
+    let Some(obj) = message.as_object() else {
+        return 0;
+    };
+    match obj.get("content") {
+        Some(Value::String(s)) => s.chars().count(),
+        Some(Value::Array(blocks)) => blocks.iter().map(count_content_block_chars).sum(),
+        Some(other) => count_value_chars(other),
+        None => 0,
+    }
+}
+
+/// Mirrors the upstream `estimateAnthropicInputTokens` heuristic: character
+/// counts of `system`, `tools`, and message contents divided by four, rounded
+/// up to the nearest token.
+pub fn estimate_anthropic_input_tokens(body: &Value) -> usize {
+    let mut total = 0usize;
+    if let Some(system) = body.get("system") {
+        total += count_value_chars(system);
+    }
+    if let Some(tools) = body.get("tools") {
+        total += count_value_chars(tools);
+    }
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            total += count_message_chars(message);
+        }
+    }
+    // ceil(total / 4)
+    total.div_ceil(4)
 }
 
 pub async fn handle_count_tokens(
@@ -73,20 +96,8 @@ pub async fn handle_count_tokens(
             json!({"error": "Method Not Allowed"}),
         );
     }
-    let mut chars = 0;
-    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
-        for m in messages {
-            if let Some(content) = m.get("content").and_then(Value::as_str) {
-                chars += content.chars().count();
-            }
-        }
-    }
-    if let Some(input) = body.get("input").and_then(Value::as_str) {
-        chars += input.chars().count();
-    }
-    // Simple heuristic 4 chars/token approximation
-    let tokens = (chars / 4).max(1);
-    json_response(StatusCode::OK, json!({ "input_tokens": tokens }))
+    let input_tokens = estimate_anthropic_input_tokens(body);
+    json_response(StatusCode::OK, json!({ "input_tokens": input_tokens }))
 }
 
 pub async fn handle_v1_search(
@@ -234,88 +245,18 @@ pub async fn handle_v1_videos(
 }
 
 pub async fn handle_v1_models_info(
-    _state: &AppState,
+    state: &AppState,
     method: &Method,
     query: Option<&str>,
 ) -> Result<Response<Body>, AppError> {
-    if method != Method::GET {
-        return json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            json!({"error": "Method Not Allowed"}),
-        );
-    }
-    let params: HashMap<String, String> = query
-        .map(|q| {
-            url::form_urlencoded::parse(q.as_bytes())
-                .map(|(k, v)| (k.into_owned(), v.into_owned()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let model = params.get("model").map(String::as_str).unwrap_or("");
-    let catalog = crate::providers::catalog();
-    let models_map = catalog.get("models").and_then(Value::as_object);
-
-    if let Some(m_obj) = models_map.and_then(|m| m.get(model)) {
-        return json_response(StatusCode::OK, json!({ "model": m_obj }));
-    }
-
-    json_response(
-        StatusCode::OK,
-        json!({
-            "model": {
-                "id": model,
-                "name": model,
-                "max_tokens": 4096,
-                "context_window": 128000
-            }
-        }),
-    )
-}
-
-pub async fn handle_v1_responses_compact(
-    _state: &AppState,
-    method: &Method,
-    body: &Value,
-) -> Result<Response<Body>, AppError> {
-    if method != Method::POST {
-        return json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            json!({"error": "Method Not Allowed"}),
-        );
-    }
-    json_response(StatusCode::OK, json!({ "compact": body }))
+    crate::model_catalog::handle_model_info(state, method, query).await
 }
 
 pub async fn handle_v1beta_models(
-    _state: &AppState,
+    state: &AppState,
     method: &Method,
-    _path: &str,
 ) -> Result<Response<Body>, AppError> {
-    if method != Method::GET {
-        return json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            json!({"error": "Method Not Allowed"}),
-        );
-    }
-    let catalog = crate::providers::catalog();
-    let models = catalog.get("models").cloned().unwrap_or_else(|| json!({}));
-    let list: Vec<Value> = models
-        .as_object()
-        .map(|m| {
-            m.iter()
-                .map(|(k, _)| {
-                    json!({
-                        "name": format!("models/{k}"),
-                        "displayName": k,
-                        "supportedGenerationMethods": ["generateContent"]
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    json_response(StatusCode::OK, json!({ "models": list }))
+    crate::model_catalog::handle_v1beta_models(state, method).await
 }
 
 pub async fn handle_v1_api_chat(
@@ -348,11 +289,12 @@ pub async fn handle_v1_api_chat(
         wants_stream,
         canonical,
         model,
+        false,
     )
     .await
 }
 
-fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, AppError> {
+pub(crate) fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, AppError> {
     let mut r = Response::new(Body::from(serde_json::to_vec(&value)?));
     *r.status_mut() = status;
     r.headers_mut().insert(
@@ -362,4 +304,47 @@ fn json_response(status: StatusCode, value: Value) -> Result<Response<Body>, App
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimates_tokens_from_string_messages() {
+        // 8 chars -> ceil(8/4) = 2
+        let body = json!({"messages": [{"role": "user", "content": "12345678"}]});
+        assert_eq!(estimate_anthropic_input_tokens(&body), 2);
+    }
+
+    #[test]
+    fn counts_system_and_tools() {
+        let body = json!({
+            "system": "abcd",
+            "tools": [{"name": "get_weather"}],
+            "messages": [{"role": "user", "content": "abcd"}]
+        });
+        // system 4 + tools 15 ("name"=4 + "get_weather"=11) + message 4 = 23 -> ceil(23/4) = 6
+        assert_eq!(estimate_anthropic_input_tokens(&body), 6);
+    }
+
+    #[test]
+    fn counts_anthropic_content_blocks() {
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "abcd"},
+                    {"type": "tool_use", "name": "f", "input": {"x": "y"}}
+                ]
+            }]
+        });
+        // text 4 + (tool_use name 1 + input {"x":"y"} 2) = 7 -> ceil(7/4) = 2
+        assert_eq!(estimate_anthropic_input_tokens(&body), 2);
+    }
+
+    #[test]
+    fn empty_body_yields_zero() {
+        assert_eq!(estimate_anthropic_input_tokens(&json!({})), 0);
+    }
 }

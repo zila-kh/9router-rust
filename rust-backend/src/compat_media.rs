@@ -16,18 +16,14 @@ pub fn is_path(path: &str) -> bool {
     }
 
     let path = normalize_public_path(path);
+    // `/v1/models/info` is native; the rest of the `/v1/models/**` prefix still
+    // delegates (single-model lookup and image-model listing).
+    if path == "/v1/models/info" {
+        return false;
+    }
     matches!(
         path.as_str(),
-        "/v1"
-            | "/v1/api/chat"
-            | "/v1/audio/voices"
-            | "/v1/messages/count_tokens"
-            | "/v1/models"
-            | "/v1/responses/compact"
-            | "/v1/search"
-            | "/v1/web"
-            | "/v1/videos"
-            | "/v1beta/models"
+        "/v1" | "/v1/api/chat" | "/v1/models" | "/v1/search" | "/v1/web" | "/v1/videos"
     ) || path.starts_with("/v1/models/")
         || path.starts_with("/v1/search/")
         || path.starts_with("/v1/web/")
@@ -126,16 +122,11 @@ mod tests {
             "/v1/v1/audio/speech",
             "/api/v1/v1/images/generations",
             "/v1/api/chat",
-            "/v1/audio/voices",
-            "/v1/messages/count_tokens",
             "/v1/models",
-            "/v1/models/info",
             "/v1/models/image",
-            "/v1/responses/compact",
             "/v1/search",
             "/api/v1/web/fetch",
             "/v1/videos/generations",
-            "/v1beta/models",
             "/api/v1beta/models/gemini-2.5-flash:generateContent",
         ] {
             assert!(is_path(path), "expected compatibility route: {path}");
@@ -147,10 +138,15 @@ mod tests {
         for path in [
             "/v1/chat/completions",
             "/v1/messages",
+            "/v1/messages/count_tokens",
             "/v1/responses",
+            "/v1/responses/compact",
             "/v1/embeddings",
             "/v1/audio/speech",
             "/v1/audio/transcriptions",
+            "/v1/audio/voices",
+            "/v1/models/info",
+            "/v1beta/models",
             "/v1/images/generations",
             "/v1/videos-extra",
         ] {
