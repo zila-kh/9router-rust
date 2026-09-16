@@ -84,7 +84,9 @@ pub async fn handle(
     }
     if is_models_path(&path) && req.method() == axum::http::Method::GET {
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
-        return json_response(StatusCode::OK, providers::all_models_openai());
+        let method = req.method().clone();
+        let headers = req.headers().clone();
+        return crate::models_list::handle_models(&state, &method, &path, &headers).await;
     }
 
     authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
@@ -183,8 +185,13 @@ pub(crate) fn authorize_llm(
     auth::require_llm(state, headers, peer, query_key)
 }
 
+/// `/v1/models` and its sub-routes — the kind listing (`/v1/models/image`) and
+/// the single-model lookup (`/v1/models/{provider}/{model}`).
+/// `/v1/models/info` is a separate route and must stay matched by
+/// [`is_models_info_path`] *before* this one.
 fn is_models_path(path: &str) -> bool {
-    matches!(path, "/v1/models" | "/api/v1/models")
+    let path = path.strip_prefix("/api").unwrap_or(path);
+    path == "/v1/models" || path.starts_with("/v1/models/")
 }
 
 fn is_count_tokens_path(path: &str) -> bool {
@@ -683,5 +690,26 @@ mod compact_tests {
         assert!(is_responses_compact_path("/v1/responses/compact"));
         assert!(is_responses_compact_path("/api/v1/responses/compact"));
         assert!(!is_responses_compact_path("/v1/responses"));
+    }
+
+    #[test]
+    fn model_paths_cover_the_list_kind_and_lookup_routes() {
+        for path in [
+            "/v1/models",
+            "/api/v1/models",
+            "/v1/models/image",
+            "/v1/models/image-to-text",
+            "/v1/models/openai/gpt-5.2",
+            "/api/v1/models/gemini/gemini-3.8-flash",
+        ] {
+            assert!(is_models_path(path), "expected models route: {path}");
+        }
+        // `/v1/models/info` is dispatched by its own matcher first.
+        assert!(is_models_path("/v1/models/info"));
+        assert!(is_models_info_path("/v1/models/info"));
+        // the `/v1/v1/**` alias stays delegated to the upstream route handlers
+        assert!(!is_models_path("/v1/v1/models"));
+        assert!(!is_models_path("/v1/models-extra"));
+        assert!(!is_models_path("/v1beta/models"));
     }
 }

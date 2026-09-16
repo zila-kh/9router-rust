@@ -16,16 +16,16 @@ pub fn is_path(path: &str) -> bool {
     }
 
     let path = normalize_public_path(path);
-    // `/v1/models/info` is native; the rest of the `/v1/models/**` prefix still
-    // delegates (single-model lookup and image-model listing).
-    if path == "/v1/models/info" {
+    // The whole `/v1/models/**` prefix is native in Rust: the list, the six
+    // kind slugs, the single-model lookup, and `/v1/models/info` (a distinct
+    // route that stays matched by name).
+    if path == "/v1/models/info" || path == "/v1/models" || path.starts_with("/v1/models/") {
         return false;
     }
     matches!(
         path.as_str(),
-        "/v1" | "/v1/api/chat" | "/v1/models" | "/v1/search" | "/v1/web" | "/v1/videos"
-    ) || path.starts_with("/v1/models/")
-        || path.starts_with("/v1/search/")
+        "/v1" | "/v1/api/chat" | "/v1/search" | "/v1/web" | "/v1/videos"
+    ) || path.starts_with("/v1/search/")
         || path.starts_with("/v1/web/")
         || path.starts_with("/v1/videos/")
         || path.starts_with("/v1beta/models/")
@@ -122,8 +122,6 @@ mod tests {
             "/v1/v1/audio/speech",
             "/api/v1/v1/images/generations",
             "/v1/api/chat",
-            "/v1/models",
-            "/v1/models/image",
             "/v1/search",
             "/api/v1/web/fetch",
             "/v1/videos/generations",
@@ -145,6 +143,11 @@ mod tests {
             "/v1/audio/speech",
             "/v1/audio/transcriptions",
             "/v1/audio/voices",
+            "/v1/models",
+            "/api/v1/models",
+            "/v1/models/image",
+            "/v1/models/image-to-text",
+            "/v1/models/openai/gpt-5.2",
             "/v1/models/info",
             "/v1beta/models",
             "/v1/images/generations",

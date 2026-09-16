@@ -194,8 +194,14 @@ request v1_double_root "${LLM_AUTH[@]}" "$BASE/v1/v1"
 grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/v1_double_root.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/v1_double_root.body"
 
+# `/v1/models` and its sub-routes are native in every mode, so they must be
+# served by Rust rather than the upstream route handlers.
+request v1_models "${LLM_AUTH[@]}" "$BASE/v1/models"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/v1_models.headers"
+grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/v1_models.body"
+
 request image_models "${LLM_AUTH[@]}" "$BASE/v1/models/image"
-grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/image_models.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/image_models.headers"
 grep -Eq '"object"[[:space:]]*:[[:space:]]*"list"' "$TMP/image_models.body"
 
 curl --silent --show-error --fail-with-body \

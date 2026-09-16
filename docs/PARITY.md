@@ -20,12 +20,11 @@ Rust remains the only public listener. For dashboard `/api/**` requests it:
 The Next server rejects backend paths without the matching secret. Native Rust still owns the core chat-completions, Claude messages, Responses, embeddings, speech, transcription, image-generation, and Codex paths. Compatibility mode maps public endpoints whose current upstream contracts are not yet native, including:
 
 - `/v1` and the upstream-compatible `/v1/v1` model-list alias;
-- the `/v1/models` filtered listing, `/v1/models/image`, and single-model lookup;
 - `/v1/api/chat` Ollama response formatting;
 - `/v1beta/models/<model>:generateContent` Gemini generation;
 - `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**`.
 
-These delegated responses are marked `x-9router-runtime: upstream-compat` and are never counted as native coverage. The public `/v1/audio/voices` listing and the dashboard TTS voice pickers are native in every mode: Rust queries the Bing read-aloud catalog, the ElevenLabs/Deepgram/Inworld APIs with the stored connection key, and the host OS voice list directly, with no nested internal HTTP hop. `/v1/models/info`, the `/v1beta/models` Gemini list, and `/v1/responses/compact` (which targets the Codex `/compact` upstream path) are native too.
+These delegated responses are marked `x-9router-runtime: upstream-compat` and are never counted as native coverage. The public `/v1/audio/voices` listing and the dashboard TTS voice pickers are native in every mode: Rust queries the Bing read-aloud catalog, the ElevenLabs/Deepgram/Inworld APIs with the stored connection key, and the host OS voice list directly, with no nested internal HTTP hop. `/v1/models`, `/v1/models/{kind}`, `/v1/models/{provider}/{model}`, `/v1/models/info`, the `/v1beta/models` Gemini list, and `/v1/responses/compact` (which targets the Codex `/compact` upstream path) are native too.
 
 Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse-proxy hop from being mistaken for a local user. Always-protected update, shutdown, database, and auto-import operations require a valid dashboard session or CLI token even when normal dashboard login is disabled. SSO login, callback, assertion-consumer, and metadata endpoints are public, while OIDC/SAML diagnostic test endpoints remain protected.
 
@@ -57,7 +56,7 @@ Core pieces include:
 - OpenAI-style TTS, STT multipart, and image-generation adapters where the provider catalog exposes compatible media endpoints;
 - OpenAI/Anthropic-style `/v1/messages/count_tokens` token estimation;
 - native `/v1/audio/voices` listing and the dashboard TTS voice pickers (edge-tts, local-device, ElevenLabs, Deepgram, Inworld);
-- `/v1/models/info` metadata (alias resolution, kind mapping, TTS `voicesUrl`, virtual `search`/`fetch` models);
+- `/v1/models` full listing (connections, combos, custom models, aliases, disabled filtering, capabilities, kind slugs, single-model lookup) and `/v1/models/info` metadata (alias resolution, kind mapping, TTS `voicesUrl`, virtual `search`/`fetch` models);
 - the `/v1beta/models` Gemini-format model list;
 - `/v1/responses/compact` (Codex `/compact` upstream target);
 - core settings/providers/provider-nodes/proxy-pools/API-keys/combos/model-alias/custom-model/usage management routes in strict native mode.
@@ -79,7 +78,10 @@ The manifest intentionally declares these classes of non-parity:
 - MCP endpoints;
 - native video generation/status/download/cancel adapters;
 - native search and web-fetch adapters;
-- native model filtering/metadata, Ollama, and complete Gemini route adapters, plus Gemini/MiniMax voice listing;
+- live model discovery for `qoder`, `github` (Copilot), `cursor` and `zed` (Rust serves those providers from the static catalog), plus the provider token-refresh step upstream runs inside the `kiro`/`grok-cli` model resolvers on a rejected token;
+- the additive models.dev catalog layer in capability resolution and per-connection proxy routing during model discovery;
+- the relative position of the eight TTS-catalog provider keys inside the `GET /v1/models/tts` listing: the id set is identical, but only the registry-derived provider order is reproducible from the exported catalog;
+- native model filtering/metadata for `qoder`/`github`/`cursor`/`zed` connections, Ollama, and complete Gemini route adapters, plus Gemini/MiniMax voice listing;
 - remaining specialized media adapters and proxy-pool deployment/test subroutes.
 
 These features are available through the pinned upstream handlers where applicable in compatibility mode, but remain real Rust-port gaps.
