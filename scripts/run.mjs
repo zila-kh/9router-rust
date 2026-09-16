@@ -258,7 +258,7 @@ async function startStack(isDev) {
   if (isDev) {
     uiProc = spawn(
       process.execPath,
-      ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(uiPort)],
+      ["node_modules/next/dist/bin/next", "dev", "--turbopack", "--hostname", "127.0.0.1", "--port", String(uiPort)],
       { cwd: frontendDir, env: commonEnv, stdio: "inherit" }
     );
   } else {

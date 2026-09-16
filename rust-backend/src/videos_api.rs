@@ -1454,19 +1454,39 @@ pub async fn proxy_core(state: &AppState, request: CoreRequest<'_>) -> CoreOutco
         }
     };
 
+    read_upstream_response(response, provider, plan.adapter, credentials).await
+}
+
+async fn read_upstream_response(
+    response: reqwest::Response,
+    provider: &str,
+    adapter: PlanAdapter,
+    credentials: &VideoCredentials,
+) -> CoreOutcome {
     let status = response.status().as_u16();
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let body_text = response.text().await.unwrap_or_default();
+    let body_text = match response.text().await {
+        Ok(text) => text,
+        Err(error) => {
+            return CoreOutcome::failure(
+                if error.is_timeout() { 504 } else { 502 },
+                sanitize_secrets(
+                    &format!("[{provider}] video upstream response body failed: {error}"),
+                    Some(credentials),
+                ),
+            );
+        }
+    };
     map_upstream_response(
         provider,
         status,
         content_type.as_deref(),
         &body_text,
-        plan.adapter,
+        adapter,
         credentials,
     )
 }
@@ -1951,6 +1971,44 @@ DQIDAQAB
             access_token: access_token.map(str::to_string),
             ..VideoCredentials::default()
         }
+    }
+
+    #[tokio::test]
+    async fn incomplete_video_body_is_not_reported_as_success() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+                assert!(request.len() <= 4096, "unexpected request size");
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/video"))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .unwrap();
+        let outcome = read_upstream_response(
+            response,
+            "xai",
+            PlanAdapter::Default,
+            &credentials(None, None),
+        )
+        .await;
+        assert!(
+            matches!(outcome, CoreOutcome::Failure { status: 502, .. }),
+            "{outcome:?}"
+        );
+        server.await.unwrap();
     }
 
     #[test]

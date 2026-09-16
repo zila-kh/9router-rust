@@ -107,7 +107,11 @@ for source, target in overlays.items():
 package = root / "package.json"
 data = json.loads(package.read_text(encoding="utf-8"))
 scripts = data.setdefault('scripts', {})
-scripts['dev:ui'] = 'next dev --webpack --hostname 127.0.0.1 --port 20129'
+scripts['dev'] = 'next dev --turbopack --port 20127'
+scripts['build'] = 'next build --turbopack'
+scripts['dev:bun'] = 'bun --bun next dev --turbopack --port 20127'
+scripts['build:bun'] = 'bun --bun next build --turbopack'
+scripts['dev:ui'] = 'next dev --turbopack --hostname 127.0.0.1 --port 20129'
 scripts['start:ui'] = 'node .next/standalone/custom-server.js'
 scripts['lint'] = 'eslint . --max-warnings=0'
 # The Rust port does not vendor upstream's legacy CLI package. Do not expose npm

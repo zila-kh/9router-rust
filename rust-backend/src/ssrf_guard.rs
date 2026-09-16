@@ -10,8 +10,8 @@
 //!   via [`assert_public_url_resolved`] (a DNS failure is *not* treated as
 //!   blocked, matching upstream);
 //! * [`fetch_public`] follows redirects manually (max 5 hops) and re-validates
-//!   every hop, so a validated public URL cannot 30x its way to an internal
-//!   target.
+//!   every hop. Cross-origin redirects are rejected to prevent replaying
+//!   provider credentials or request bodies to a different origin.
 
 use reqwest::{header::HeaderMap, header::LOCATION, Client, Method};
 use std::time::Duration;
@@ -259,9 +259,18 @@ pub async fn assert_public_url_resolved(raw_url: &str) -> Result<(), String> {
 /// Resolve a possibly relative redirect `location` against `base`.
 pub fn redirect_target(base: &str, location: &str) -> Result<String, String> {
     let base = parse_url(base)?;
-    base.join(location)
-        .map(|url| url.to_string())
-        .map_err(|e| format!("Invalid redirect target: {e}"))
+    let target = base
+        .join(location)
+        .map_err(|e| format!("Invalid redirect target: {e}"))?;
+    // Requests can carry credentials in headers, query strings, or JSON bodies.
+    // Stripping Authorization alone cannot make replay to another origin safe.
+    if target.origin() != base.origin() {
+        return Err("Blocked URL: cross-origin redirect".to_string());
+    }
+    if target.username() != base.username() || target.password() != base.password() {
+        return Err("Blocked URL: redirect changes credentials".to_string());
+    }
+    Ok(target.to_string())
 }
 
 /// A prepared upstream request reused across redirect hops (upstream re-sends
@@ -294,7 +303,8 @@ impl FetchFailure {
     }
 }
 
-/// `fetch` with SSRF-safe manual redirect handling. Mirrors `fetchPublic`.
+/// Guarded manual redirect handling. Unlike upstream `fetchPublic`, redirects
+/// must stay on the same origin because provider bodies can contain secrets.
 pub async fn fetch_public(
     client: &Client,
     url: &str,
@@ -420,16 +430,32 @@ mod tests {
             "https://api.example.com/v2/search"
         );
         assert_eq!(
-            redirect_target(
-                "https://api.example.com/v1/search",
-                "https://other.example.com/x"
-            )
-            .unwrap(),
-            "https://other.example.com/x"
-        );
-        assert_eq!(
             redirect_target("https://api.example.com/v1/search", "child").unwrap(),
             "https://api.example.com/v1/child"
+        );
+    }
+
+    #[test]
+    fn rejects_redirects_that_could_disclose_provider_credentials() {
+        for location in [
+            "https://other.example.com/x",
+            "//other.example.com/x",
+            "http://api.example.com/x",
+            "https://api.example.com:8443/x",
+            "https://user:password@api.example.com/x",
+        ] {
+            assert!(
+                redirect_target("https://api.example.com/v1/search", location).is_err(),
+                "must not replay the provider request to {location}"
+            );
+        }
+        assert_eq!(
+            redirect_target(
+                "https://api.example.com/v1/search",
+                "https://api.example.com:443/v2"
+            )
+            .unwrap(),
+            "https://api.example.com/v2"
         );
     }
 

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-tar --exclude='node_modules' --exclude='.next' -cf - -C "$ROOT" frontend | tar -xf - -C "$TMP"
+tar --exclude='node_modules' --exclude='.next' --exclude='.next-*' -cf - -C "$ROOT" frontend | tar -xf - -C "$TMP"
 
 # Simulate a stale/upstream refresh that lost the reviewed trust-boundary files.
 printf '%s\n' '// intentionally stale custom server' > "$TMP/frontend/custom-server.js"
@@ -30,6 +30,11 @@ const packagePath = process.argv[2];
 const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
 if (pkg.scripts?.["start:ui"] !== "node .next/standalone/custom-server.js") {
   throw new Error("start:ui was not restored to the hardened standalone wrapper");
+}
+for (const name of ['dev', 'build', 'dev:ui', 'dev:bun', 'build:bun']) {
+  if (!pkg.scripts?.[name]?.includes('--turbopack') || pkg.scripts[name].includes('--webpack')) {
+    throw new Error(`materialization did not preserve Turbopack for ${name}`);
+  }
 }
 if (pkg.scripts?.["cli:pack"] || pkg.scripts?.["cli:publish"]) {
   throw new Error("materialization restored CLI scripts for the non-vendored legacy CLI");

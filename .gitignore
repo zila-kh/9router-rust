@@ -11,6 +11,7 @@ frontend/node_modules/
 .pnp
 .pnp.*
 frontend/.next/
+frontend/.next-*/
 frontend/out/
 frontend/build/
 .next/

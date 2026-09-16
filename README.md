@@ -21,6 +21,10 @@ npm run dev   # development (Next dev + Rust debug)
 npm start     # production (Next standalone + Rust release)
 ```
 
+The dashboard uses Turbopack for development and production builds. The frontend
+materialization scripts preserve this choice. `npm --prefix frontend run dev:webpack`
+remains available as an explicit development fallback.
+
 ### Linux / macOS (bash)
 
 Development:

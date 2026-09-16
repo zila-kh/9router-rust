@@ -333,29 +333,70 @@ fn request_wants_stream(
 }
 
 fn combo_targets(state: &AppState, requested: &str) -> Result<Vec<String>, AppError> {
-    let Some(combo) = state.db.combo_by_name(requested)? else {
-        return Ok(vec![requested.to_string()]);
-    };
-    let mut out = Vec::new();
-    for item in combo
-        .get("models")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-    {
-        if let Some(s) = item.as_str() {
-            out.push(s.to_string());
-        } else if let Some(s) = item.get("model").and_then(Value::as_str) {
-            if item.get("enabled").and_then(Value::as_bool) != Some(false) {
-                out.push(s.to_string());
+    expand_combo_targets(&state.db.combos()?, requested)
+}
+
+fn expand_combo_targets(combos: &[Value], requested: &str) -> Result<Vec<String>, AppError> {
+    fn visit(
+        combos: &[Value],
+        name: &str,
+        path: &mut Vec<String>,
+        remaining: &mut usize,
+        out: &mut Vec<String>,
+    ) -> Result<(), AppError> {
+        if *remaining == 0 {
+            return Err(AppError::BadRequest(
+                "combo expansion exceeds the maximum size".into(),
+            ));
+        }
+        *remaining -= 1;
+        let Some(combo) = combos
+            .iter()
+            .find(|combo| combo.get("name").and_then(Value::as_str) == Some(name))
+        else {
+            out.push(name.to_string());
+            return Ok(());
+        };
+        if path.iter().any(|ancestor| ancestor == name) {
+            return Err(AppError::BadRequest(format!(
+                "combo reference graph is cyclic at {name}"
+            )));
+        }
+        if path.len() >= 64 {
+            return Err(AppError::BadRequest(
+                "combo reference graph exceeds the maximum depth".into(),
+            ));
+        }
+        path.push(name.to_string());
+        let start = out.len();
+        for item in combo
+            .get("models")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let target = item.as_str().or_else(|| {
+                (item.get("enabled").and_then(Value::as_bool) != Some(false))
+                    .then(|| item.get("model").and_then(Value::as_str))
+                    .flatten()
+            });
+            if let Some(target) = target {
+                visit(combos, target, path, remaining, out)?;
             }
         }
+        path.pop();
+        if out.len() == start {
+            return Err(AppError::BadRequest(format!(
+                "combo {name} has no enabled models"
+            )));
+        }
+        Ok(())
     }
-    if out.is_empty() {
-        return Err(AppError::BadRequest(format!(
-            "combo {requested} has no enabled models"
-        )));
-    }
+
+    // Use one DB snapshot, and track ancestors per branch so shared sub-combos
+    // remain valid and preserve their position in the fallback order.
+    let mut out = Vec::new();
+    visit(combos, requested, &mut Vec::new(), &mut 4096, &mut out)?;
     Ok(out)
 }
 
@@ -368,16 +409,26 @@ pub async fn execute_target_direct(
     target: &str,
     compact: bool,
 ) -> Result<Response<Body>, AppError> {
-    execute_target(
-        state,
-        headers,
-        caller,
-        wants_stream,
-        canonical,
-        target,
-        compact,
-    )
-    .await
+    let mut last_error = None;
+    for candidate in combo_targets(state, target)? {
+        let mut payload = canonical.clone();
+        payload["model"] = Value::String(candidate.clone());
+        match execute_target(
+            state,
+            headers,
+            caller,
+            wants_stream,
+            payload,
+            &candidate,
+            compact,
+        )
+        .await
+        {
+            Ok(response) => return Ok(response),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| AppError::NotFound(format!("no route for model {target}"))))
 }
 
 async fn execute_target(
@@ -730,6 +781,100 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod compact_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn model_test_resolves_nested_combo_before_provider_lookup() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.sqlite");
+        let db = crate::db::Db::open(&db_path).unwrap();
+        db.upsert_combo(json!({"name":"combo-ui-lite", "models":["combo-free"]}))
+            .unwrap();
+        db.upsert_combo(json!({"name":"combo-free", "models":["missing-leaf-model"]}))
+            .unwrap();
+        let state = AppState::new(
+            crate::config::Config {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                ui_origin: "http://127.0.0.1:20129".into(),
+                data_dir: temp.path().to_path_buf(),
+                db_path,
+                upstream_timeout_secs: 1,
+                ui_only_header_secret: "test-only".into(),
+                legacy_backend_origin: None,
+                compat_api_enabled: false,
+            },
+            db,
+        )
+        .unwrap();
+        let result = execute_target_direct(
+            &state,
+            &HeaderMap::new(),
+            Format::OpenAi,
+            false,
+            json!({"model":"combo-ui-lite", "messages":[]}),
+            "combo-ui-lite",
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(AppError::NotFound(ref message)) if message == "no active provider for model missing-leaf-model")
+        );
+    }
+
+    #[test]
+    fn nested_combos_expand_in_fallback_order() {
+        let combos = vec![
+            json!({"name":"combo-ui-lite", "models":["ocg/mimo-v2.5", "combo-free", "cx/last"]}),
+            json!({"name":"combo-free", "models":["tokenrouter/free", {"model":"mmf/mimo-auto", "enabled":true}, {"model":"disabled", "enabled":false}]}),
+        ];
+        assert_eq!(
+            expand_combo_targets(&combos, "combo-ui-lite").unwrap(),
+            vec![
+                "ocg/mimo-v2.5",
+                "tokenrouter/free",
+                "mmf/mimo-auto",
+                "cx/last"
+            ]
+        );
+        assert_eq!(
+            expand_combo_targets(&combos, "cx/direct").unwrap(),
+            vec!["cx/direct"]
+        );
+    }
+
+    #[test]
+    fn shared_combos_are_not_cycles() {
+        let combos = vec![
+            json!({"name":"root", "models":["child", "child"]}),
+            json!({"name":"child", "models":["provider/model"]}),
+        ];
+        assert_eq!(
+            expand_combo_targets(&combos, "root").unwrap(),
+            vec!["provider/model", "provider/model"]
+        );
+    }
+
+    #[test]
+    fn invalid_combo_graphs_fail_without_recursing_forever() {
+        for combos in [
+            vec![json!({"name":"root", "models":["root"]})],
+            vec![
+                json!({"name":"root", "models":["child"]}),
+                json!({"name":"child", "models":["root"]}),
+            ],
+            vec![json!({"name":"root", "models":[{"model":"root", "enabled":false}]})],
+        ] {
+            assert!(matches!(
+                expand_combo_targets(&combos, "root"),
+                Err(AppError::BadRequest(_))
+            ));
+        }
+        let deep: Vec<Value> = (0..66)
+            .map(|i| json!({"name":format!("c{i}"), "models":[format!("c{}", i+1)]}))
+            .collect();
+        assert!(expand_combo_targets(&deep, "c0").is_err());
+        let broad = vec![json!({"name":"root", "models":vec!["provider/model"; 4097]})];
+        assert!(expand_combo_targets(&broad, "root").is_err());
+    }
 
     #[test]
     fn compact_suffix_only_applies_to_codex_responses_urls() {

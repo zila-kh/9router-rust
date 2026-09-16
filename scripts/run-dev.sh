@@ -129,7 +129,7 @@ trap 'on_signal 143' TERM
 
 (
   cd frontend
-  exec node node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1 --port "$UI_PORT"
+  exec node node_modules/next/dist/bin/next dev --turbopack --hostname 127.0.0.1 --port "$UI_PORT"
 ) &
 ui_pid=$!
 wait_ready "internal Next UI" "$NINEROUTER_UI_ORIGIN/login" "$ui_pid" 90

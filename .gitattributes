@@ -1,0 +1,2 @@
+# Keep Bash launchers executable from Windows checkouts under WSL/Git Bash.
+*.sh text eol=lf

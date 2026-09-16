@@ -368,8 +368,8 @@ fn expand_segment(text: &str, segment: &Value) -> String {
         return String::new();
     }
     let length = text.encode_utf16().count() as i64;
-    let start = (start_index - AG_CONTEXT_BEFORE).max(0);
-    let end = (end_index + AG_CONTEXT_AFTER).min(length);
+    let start = start_index.saturating_sub(AG_CONTEXT_BEFORE).max(0);
+    let end = end_index.saturating_add(AG_CONTEXT_AFTER).min(length);
     let mut out = utf16_slice(text, start as usize, end.max(start) as usize)
         .trim()
         .to_string();
@@ -1540,6 +1540,21 @@ mod tests {
         assert_eq!(js_integer(&json!(2.0)), Some(2));
         assert_eq!(js_integer(&json!(2.5)), None);
         assert_eq!(js_integer(&json!("2")), None);
+    }
+
+    #[test]
+    fn citation_windows_handle_extreme_provider_offsets() {
+        assert_eq!(
+            expand_segment(
+                "answer text",
+                &json!({"startIndex": i64::MIN, "endIndex": i64::MAX})
+            ),
+            "answer text"
+        );
+        assert_eq!(
+            expand_segment("answer text", &json!({"startIndex": 0, "endIndex": 1e100})),
+            "answer text"
+        );
     }
 
     #[test]

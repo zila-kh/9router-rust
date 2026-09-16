@@ -115,6 +115,10 @@ writeIfChanged('next.config.mjs', nextConfig);
 
 const packageJson = JSON.parse(read('package.json'));
 packageJson.scripts ||= {};
-packageJson.scripts['dev:ui'] = 'next dev --webpack --hostname 127.0.0.1 --port 20129';
+packageJson.scripts['dev'] = 'next dev --turbopack --port 20127';
+packageJson.scripts['build'] = 'next build --turbopack';
+packageJson.scripts['dev:bun'] = 'bun --bun next dev --turbopack --port 20127';
+packageJson.scripts['build:bun'] = 'bun --bun next build --turbopack';
+packageJson.scripts['dev:ui'] = 'next dev --turbopack --hostname 127.0.0.1 --port 20129';
 packageJson.scripts['start:ui'] = 'next start --hostname 127.0.0.1 --port 20129';
 writeIfChanged('package.json', `${JSON.stringify(packageJson, null, 2)}\n`);

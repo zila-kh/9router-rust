@@ -65,6 +65,12 @@ Core pieces include:
 
 ## Declared gaps blocking a 100%-native release
 
+Native search transport intentionally rejects redirects to a different origin
+(including HTTPS downgrades and port changes), and redirects that change URL
+credentials. The pinned upstream helper replays the original request on those
+redirects; retaining that behavior could disclose provider keys in headers or
+bodies. Same-origin redirects remain supported.
+
 The manifest intentionally declares these classes of non-parity:
 
 - interactive OAuth flows and provider-specific refresh/retry quirks;
