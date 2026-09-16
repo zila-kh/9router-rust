@@ -22,7 +22,7 @@ use crate::{
         error_response, method_not_allowed, ok_response, provider_error_response, truncate_utf16,
     },
     error::AppError,
-    providers,
+    providers, search_chat,
     ssrf_guard::{self, FetchFailure, PublicRequest},
     state::AppState,
 };
@@ -1859,16 +1859,6 @@ async fn handle_single_provider(
             )),
         );
     }
-    if !has_config {
-        // Upstream would run a chat-based search (`searchViaChat`) here; the
-        // native backend has no chat-search adapter yet.
-        return provider_error_response(
-            501,
-            &format!(
-                "Provider {provider_id} chat-based web search is not implemented in the native Rust backend"
-            ),
-        );
-    }
 
     let query = body
         .get("query")
@@ -1904,15 +1894,19 @@ async fn handle_single_provider(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if no_auth {
-        let outcome = try_dedicated_provider(
-            state,
-            &provider_id,
-            &provider_config,
-            &core_body,
-            None,
-            started,
-        )
-        .await;
+        let outcome = if has_config {
+            try_dedicated_provider(
+                state,
+                &provider_id,
+                &provider_config,
+                &core_body,
+                None,
+                started,
+            )
+            .await
+        } else {
+            try_chat_search(state, &provider_id, &core_body, None).await
+        };
         return outcome_response(outcome);
     }
 
@@ -1940,15 +1934,19 @@ async fn handle_single_provider(
             return error_response(status, Some(&error));
         };
 
-        let outcome = try_dedicated_provider(
-            state,
-            &provider_id,
-            &provider_config,
-            &core_body,
-            Some(&credentials),
-            started,
-        )
-        .await;
+        let outcome = if has_config {
+            try_dedicated_provider(
+                state,
+                &provider_id,
+                &provider_config,
+                &core_body,
+                Some(&credentials),
+                started,
+            )
+            .await
+        } else {
+            try_chat_search(state, &provider_id, &core_body, Some(&credentials)).await
+        };
         match outcome {
             CoreOutcome::Success(data) => return ok_response(data),
             CoreOutcome::Failure { status, error } => {
@@ -1958,6 +1956,42 @@ async fn handle_single_provider(
                 last = Some((status, error));
             }
         }
+    }
+}
+
+/// Upstream `handleSearchCore` chat branch: `handleChatSearch`.
+///
+/// The chat wrapper owns its own fixed timeout and only needs the query, the
+/// optional `max_results` and the connection credential, so it does not share
+/// the dedicated providers' global deadline.
+async fn try_chat_search(
+    state: &AppState,
+    provider_id: &str,
+    body: &Value,
+    credentials: Option<&Credentials>,
+) -> CoreOutcome {
+    let chat_credentials = search_chat::ChatCredentials {
+        token: credentials.and_then(|credentials| credentials.api_key.clone()),
+        // Upstream surfaces `connection.projectId` on the credential object; the
+        // native `provider_specific_data` carries the whole connection row.
+        project_id: credentials
+            .and_then(|credentials| credentials.provider_specific_data.as_ref())
+            .and_then(|connection| connection.get("projectId"))
+            .filter(|value| !value.is_null())
+            .cloned(),
+    };
+    let query = body.get("query").and_then(Value::as_str).unwrap_or("");
+    match search_chat::handle(
+        state,
+        provider_id,
+        query,
+        body.get("max_results"),
+        &chat_credentials,
+    )
+    .await
+    {
+        search_chat::Outcome::Success(data) => CoreOutcome::Success(data),
+        search_chat::Outcome::Failure { status, error } => CoreOutcome::Failure { status, error },
     }
 }
 

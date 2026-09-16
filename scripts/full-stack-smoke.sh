@@ -280,6 +280,31 @@ grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/search.headers"
 grep -qi 'Invalid JSON body' "$TMP/search.body"
 ! grep -qi 'Rust media route not implemented yet' "$TMP/search.body"
 
+# Chat-based web search (`searchViaChat`) is native too: with no provider
+# connection each of the nine chat providers must answer the native credential
+# 400 instead of an upstream-compat passthrough or an "is not implemented" 501.
+for search_provider in antigravity gemini kimi minimax openai perplexity perplexity-agent vercel-ai-gateway xai; do
+  chat_search_status="$(curl --silent --show-error \
+    "${LLM_AUTH[@]}" \
+    --header 'content-type: application/json' \
+    --data "{\"provider\":\"$search_provider\",\"query\":\"rust\"}" \
+    --dump-header "$TMP/chat-search-$search_provider.headers" \
+    --output "$TMP/chat-search-$search_provider.body" \
+    --write-out '%{http_code}' \
+    "$BASE/v1/search")"
+  grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/chat-search-$search_provider.headers"
+  case "$chat_search_status" in
+    400) ;;
+    *)
+      echo "Chat-search provider $search_provider was not handled natively (HTTP $chat_search_status)" >&2
+      cat "$TMP/chat-search-$search_provider.body" >&2
+      exit 1
+      ;;
+  esac
+  grep -q "No credentials for provider: $search_provider" "$TMP/chat-search-$search_provider.body"
+  ! grep -qi 'chat-based web search is not implemented' "$TMP/chat-search-$search_provider.body"
+done
+
 # A standards-compliant CORS preflight may be answered by Axum's outer CorsLayer
 # with HTTP 200 or by the compatibility handler itself with HTTP 204. Validate the
 # actual browser contract rather than coupling the smoke test to one middleware.

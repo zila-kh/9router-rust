@@ -41,6 +41,7 @@ mod providers_oauth;
 mod remaining_infra;
 mod request_path;
 mod search_api;
+mod search_chat;
 mod special;
 mod ssrf_guard;
 mod state;
