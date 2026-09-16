@@ -66,7 +66,7 @@ Both commands:
 4. start Rust as the only public listener;
 5. keep login, session enforcement, health, and parity reporting native in Rust;
 6. send other dashboard management APIs through the pinned upstream handlers for exact response shapes and current feature coverage;
-7. selectively map the still-unported `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**` families to their pinned upstream handlers;
+7. selectively map the still-unported `/v1/videos/**` family to its pinned upstream handlers;
 8. initialize upstream background/runtime services only in secured compatibility mode;
 9. make Rust and Next use the same data directory and SQLite database.
 
@@ -80,7 +80,7 @@ The internal Next listener rejects `/api`, `/v1`, `/v1beta`, `/responses`, and `
 
 Rust mirrors upstream route security classes before delegation. Normal dashboard APIs require a dashboard session or the upstream-compatible `x-9r-cli-token`; update, shutdown, and database operations require a valid session or CLI token even when dashboard login is disabled. Host-control operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom control require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse proxy hop from being mistaken for a local user.
 
-Public model APIs keep Rust authentication at the outer boundary. Core chat, model-list, embeddings, audio, image, Responses, Claude, Gemini, and Codex paths remain native. Compatibility mode delegates only the currently unported video generation/status/download/cancel, search, and web-fetch paths. These responses are visibly marked `x-9router-runtime: upstream-compat` and are not counted as native parity.
+Public model APIs keep Rust authentication at the outer boundary. Core chat, model-list, embeddings, audio, image, Responses, Claude, Gemini, Codex, search, and web-fetch paths remain native. Compatibility mode delegates only the currently unported video generation/status/download/cancel paths. These responses are visibly marked `x-9router-runtime: upstream-compat` and are not counted as native parity.
 
 The proxy does not follow HTTP redirects. OIDC, SAML, login, and other redirect responses are returned to the browser with the original public host and protocol preserved.
 

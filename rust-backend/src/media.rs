@@ -20,8 +20,6 @@ pub fn is_media_path(path: &str) -> bool {
         || p == "/v1/audio/transcriptions"
         || p == "/v1/audio/translations"
         || p.starts_with("/v1/images/")
-        || p == "/v1/search"
-        || p.starts_with("/v1/web/")
         || p.starts_with("/v1/videos")
 }
 

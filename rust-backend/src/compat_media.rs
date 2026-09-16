@@ -12,7 +12,8 @@ const MAX_BODY: usize = 128 * 1024 * 1024;
 pub fn is_path(path: &str) -> bool {
     let without_api_prefix = path.strip_prefix("/api").unwrap_or(path);
     if without_api_prefix == "/v1/v1" || without_api_prefix.starts_with("/v1/v1/") {
-        return true;
+        let normalized = normalize_public_path(path);
+        return !is_native_search_or_fetch(&normalized);
     }
 
     let path = normalize_public_path(path);
@@ -22,13 +23,14 @@ pub fn is_path(path: &str) -> bool {
     if path == "/v1/models/info" || path == "/v1/models" || path.starts_with("/v1/models/") {
         return false;
     }
-    matches!(
-        path.as_str(),
-        "/v1" | "/v1/api/chat" | "/v1/search" | "/v1/web" | "/v1/videos"
-    ) || path.starts_with("/v1/search/")
-        || path.starts_with("/v1/web/")
+    matches!(path.as_str(), "/v1" | "/v1/api/chat" | "/v1/videos")
         || path.starts_with("/v1/videos/")
         || path.starts_with("/v1beta/models/")
+}
+
+/// Routes migrated to native Rust handlers: `/v1/search` and `/v1/web/fetch`.
+fn is_native_search_or_fetch(path: &str) -> bool {
+    path == "/v1/search" || path.starts_with("/v1/search/") || path.starts_with("/v1/web/")
 }
 
 pub async fn handle(
@@ -122,8 +124,6 @@ mod tests {
             "/v1/v1/audio/speech",
             "/api/v1/v1/images/generations",
             "/v1/api/chat",
-            "/v1/search",
-            "/api/v1/web/fetch",
             "/v1/videos/generations",
             "/api/v1beta/models/gemini-2.5-flash:generateContent",
         ] {
@@ -152,6 +152,13 @@ mod tests {
             "/v1beta/models",
             "/v1/images/generations",
             "/v1/videos-extra",
+            "/v1/search",
+            "/api/v1/search",
+            "/v1/search/",
+            "/v1/web/fetch",
+            "/api/v1/web/fetch",
+            "/v1/v1/search",
+            "/v1/v1/web/fetch",
         ] {
             assert!(!is_path(path), "expected native Rust route: {path}");
         }

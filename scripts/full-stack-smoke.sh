@@ -246,8 +246,8 @@ esac
 ! grep -qi 'Rust media route not implemented yet' "$TMP/video.body"
 
 # Exercise the actual web-fetch handler with deliberately invalid JSON. A 400
-# from upstream proves Rust routed the authenticated request to compatibility
-# code without making an external network request.
+# from the native handler proves Rust routed the authenticated request without
+# making an external network request.
 web_fetch_status="$(curl --silent --show-error \
   "${LLM_AUTH[@]}" \
   --header 'content-type: application/json' \
@@ -257,8 +257,23 @@ web_fetch_status="$(curl --silent --show-error \
   --write-out '%{http_code}' \
   "$BASE/v1/web/fetch")"
 [[ "$web_fetch_status" == 400 ]]
-grep -qi '^x-9router-runtime:[[:space:]]*upstream-compat' "$TMP/web-fetch.headers"
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/web-fetch.headers"
 grep -qi 'Invalid JSON body' "$TMP/web-fetch.body"
+
+# /v1/search is native in every mode too: a malformed body must be rejected by
+# Rust with the upstream OpenAI-shaped 400 envelope.
+search_status="$(curl --silent --show-error \
+  "${LLM_AUTH[@]}" \
+  --header 'content-type: application/json' \
+  --data '{' \
+  --dump-header "$TMP/search.headers" \
+  --output "$TMP/search.body" \
+  --write-out '%{http_code}' \
+  "$BASE/v1/search")"
+[[ "$search_status" == 400 ]]
+grep -qi '^x-9router-runtime:[[:space:]]*rust' "$TMP/search.headers"
+grep -qi 'Invalid JSON body' "$TMP/search.body"
+! grep -qi 'Rust media route not implemented yet' "$TMP/search.body"
 
 # A standards-compliant CORS preflight may be answered by Axum's outer CorsLayer
 # with HTTP 200 or by the compatibility handler itself with HTTP 204. Validate the

@@ -100,111 +100,25 @@ pub async fn handle_count_tokens(
     json_response(StatusCode::OK, json!({ "input_tokens": input_tokens }))
 }
 
+/// Internal `/api/v1/search` path. Delegates to the native adapter module so
+/// the public `/v1/search` route and this internal path share one contract.
 pub async fn handle_v1_search(
     state: &AppState,
     method: &Method,
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
-    if method != Method::POST {
-        return json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            json!({"error": "Method Not Allowed"}),
-        );
-    }
-    let query = body.get("query").and_then(Value::as_str).unwrap_or("");
-    if query.is_empty() {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({"error": "query parameter required"}),
-        );
-    }
-
-    let searxng_url =
-        std::env::var("SEARXNG_URL").unwrap_or_else(|_| "http://127.0.0.1:8080/search".into());
-    let search_req = state
-        .http
-        .get(&searxng_url)
-        .query(&[("q", query), ("format", "json")]);
-
-    match search_req.send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let data: Value = resp.json().await.unwrap_or(json!({ "results": [] }));
-            json_response(StatusCode::OK, data)
-        }
-        _ => {
-            // Fallback to DuckDuckGo instant API
-            let ddg_url = "https://api.duckduckgo.com/";
-            match state
-                .http
-                .get(ddg_url)
-                .query(&[("q", query), ("format", "json"), ("no_html", "1")])
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let data: Value = resp.json().await.unwrap_or(json!({}));
-                    let mut results = Vec::new();
-                    if let Some(topics) = data.get("RelatedTopics").and_then(Value::as_array) {
-                        for t in topics {
-                            if let (Some(text), Some(url)) = (
-                                t.get("Text").and_then(Value::as_str),
-                                t.get("FirstURL").and_then(Value::as_str),
-                            ) {
-                                results.push(json!({ "title": text, "url": url, "content": text }));
-                            }
-                        }
-                    }
-                    json_response(
-                        StatusCode::OK,
-                        json!({ "query": query, "results": results }),
-                    )
-                }
-                _ => json_response(StatusCode::OK, json!({ "query": query, "results": [] })),
-            }
-        }
-    }
+    let raw = bytes::Bytes::from(serde_json::to_vec(body)?);
+    crate::search_api::handle(state, method, &raw).await
 }
 
+/// Internal `/api/v1/web/fetch` path. Delegates to the native adapter module.
 pub async fn handle_v1_web_fetch(
     state: &AppState,
     method: &Method,
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
-    if method != Method::POST {
-        return json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            json!({"error": "Method Not Allowed"}),
-        );
-    }
-    let url = body.get("url").and_then(Value::as_str).unwrap_or("");
-    if url.is_empty() {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({"error": "url parameter required"}),
-        );
-    }
-
-    match state.http.get(url).send().await {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let text = resp.text().await.unwrap_or_default();
-            json_response(
-                StatusCode::OK,
-                json!({
-                    "url": url,
-                    "status": status,
-                    "content": text
-                }),
-            )
-        }
-        Err(e) => json_response(
-            StatusCode::BAD_GATEWAY,
-            json!({
-                "url": url,
-                "error": e.to_string()
-            }),
-        ),
-    }
+    let raw = bytes::Bytes::from(serde_json::to_vec(body)?);
+    crate::web_fetch_api::handle(state, method, &raw).await
 }
 
 pub async fn handle_v1_videos(

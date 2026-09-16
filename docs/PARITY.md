@@ -22,9 +22,9 @@ The Next server rejects backend paths without the matching secret. Native Rust s
 - `/v1` and the upstream-compatible `/v1/v1` model-list alias;
 - `/v1/api/chat` Ollama response formatting;
 - `/v1beta/models/<model>:generateContent` Gemini generation;
-- `/v1/videos/**`, `/v1/search/**`, and `/v1/web/**`.
+- `/v1/videos/**`.
 
-These delegated responses are marked `x-9router-runtime: upstream-compat` and are never counted as native coverage. The public `/v1/audio/voices` listing and the dashboard TTS voice pickers are native in every mode: Rust queries the Bing read-aloud catalog, the ElevenLabs/Deepgram/Inworld APIs with the stored connection key, and the host OS voice list directly, with no nested internal HTTP hop. `/v1/models`, `/v1/models/{kind}`, `/v1/models/{provider}/{model}`, `/v1/models/info`, the `/v1beta/models` Gemini list, and `/v1/responses/compact` (which targets the Codex `/compact` upstream path) are native too.
+These delegated responses are marked `x-9router-runtime: upstream-compat` and are never counted as native coverage. The public `/v1/audio/voices` listing and the dashboard TTS voice pickers are native in every mode: Rust queries the Bing read-aloud catalog, the ElevenLabs/Deepgram/Inworld APIs with the stored connection key, and the host OS voice list directly, with no nested internal HTTP hop. `/v1/models`, `/v1/models/{kind}`, `/v1/models/{provider}/{model}`, `/v1/models/info`, the `/v1beta/models` Gemini list, and `/v1/responses/compact` (which targets the Codex `/compact` upstream path) are native too. `POST /v1/search` and `POST /v1/web/fetch` are native in every mode as well: Rust resolves the provider from the catalog, builds each provider request (auth headers, query strings, bodies), normalises the results, guards every outbound URL with the ported SSRF rules, and reproduces the upstream error envelopes. Only the chat-based search path (`searchViaChat` providers) still has no native adapter and returns an explicit 501.
 
 Host-sensitive operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom controls require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse-proxy hop from being mistaken for a local user. Always-protected update, shutdown, database, and auto-import operations require a valid dashboard session or CLI token even when normal dashboard login is disabled. SSO login, callback, assertion-consumer, and metadata endpoints are public, while OIDC/SAML diagnostic test endpoints remain protected.
 
@@ -59,6 +59,8 @@ Core pieces include:
 - `/v1/models` full listing (connections, combos, custom models, aliases, disabled filtering, capabilities, kind slugs, single-model lookup) and `/v1/models/info` metadata (alias resolution, kind mapping, TTS `voicesUrl`, virtual `search`/`fetch` models);
 - the `/v1beta/models` Gemini-format model list;
 - `/v1/responses/compact` (Codex `/compact` upstream target);
+- `POST /v1/search` for the twelve dedicated `searchConfig` providers (serper, brave-search, exa, tavily, google-pse, linkup, searchapi, youcom, searxng, xquik, ollama-search, glm) with upstream request construction, result normalisation, the ported SSRF guard, and the upstream error envelopes;
+- `POST /v1/web/fetch` for the five `fetchConfig` providers (firecrawl, jina-reader, tavily, exa, ollama) with the upstream response payload (`content`, `metadata`, `usage`, `metrics`, optional `links`);
 - core settings/providers/provider-nodes/proxy-pools/API-keys/combos/model-alias/custom-model/usage management routes in strict native mode.
 
 ## Declared gaps blocking a 100%-native release
@@ -77,7 +79,7 @@ The manifest intentionally declares these classes of non-parity:
 - Tailscale/cloudflared tunnel management;
 - MCP endpoints;
 - native video generation/status/download/cancel adapters;
-- native search and web-fetch adapters;
+- the chat-based web search path (`searchViaChat` providers: antigravity, gemini, kimi, minimax, openai, perplexity, perplexity-agent, vercel-ai-gateway, xai): the native search route answers those providers with an explicit 501 instead of running a chat completion, and the provider-account cooldown/backoff bookkeeping around it is not persisted (the native route walks the active connections and returns the last error);
 - live model discovery for `qoder`, `github` (Copilot), `cursor` and `zed` (Rust serves those providers from the static catalog), plus the provider token-refresh step upstream runs inside the `kiro`/`grok-cli` model resolvers on a rejected token;
 - the additive models.dev catalog layer in capability resolution and per-connection proxy routing during model discovery;
 - the relative position of the eight TTS-catalog provider keys inside the `GET /v1/models/tts` listing: the id set is identical, but only the registry-derived provider order is reproducible from the exported catalog;

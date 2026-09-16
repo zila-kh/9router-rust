@@ -88,6 +88,24 @@ pub async fn handle(
         let headers = req.headers().clone();
         return crate::models_list::handle_models(&state, &method, &path, &headers).await;
     }
+    if is_search_path(&path) {
+        authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+        let method = req.method().clone();
+        let (_, body) = req.into_parts();
+        let bytes = to_bytes(body, MAX_BODY)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("failed to read request body: {e}")))?;
+        return crate::search_api::handle(&state, &method, &bytes).await;
+    }
+    if is_web_fetch_path(&path) {
+        authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+        let method = req.method().clone();
+        let (_, body) = req.into_parts();
+        let bytes = to_bytes(body, MAX_BODY)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("failed to read request body: {e}")))?;
+        return crate::web_fetch_api::handle(&state, &method, &bytes).await;
+    }
 
     authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
     let caller = if compact {
@@ -199,6 +217,20 @@ fn is_count_tokens_path(path: &str) -> bool {
         path,
         "/v1/messages/count_tokens" | "/api/v1/messages/count_tokens"
     )
+}
+
+/// `/v1/search` (public) and `/api/v1/search` (internal Next-compat path).
+fn is_search_path(path: &str) -> bool {
+    let path = path.strip_prefix("/api").unwrap_or(path);
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+    path == "/search" || path == "/v1/search"
+}
+
+/// `/v1/web/fetch` (public) and `/api/v1/web/fetch` (internal path).
+fn is_web_fetch_path(path: &str) -> bool {
+    let path = path.strip_prefix("/api").unwrap_or(path);
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+    path == "/web/fetch" || path == "/v1/web/fetch"
 }
 
 fn is_audio_voices_path(path: &str) -> bool {

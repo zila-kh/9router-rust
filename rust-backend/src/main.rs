@@ -14,6 +14,7 @@
     clippy::too_many_arguments
 )]
 
+mod api_errors;
 mod app;
 mod auth;
 mod auto_router;
@@ -39,13 +40,16 @@ mod providers;
 mod providers_oauth;
 mod remaining_infra;
 mod request_path;
+mod search_api;
 mod special;
+mod ssrf_guard;
 mod state;
 mod streaming;
 mod translate;
 mod ui_proxy;
 mod usage_mgmt;
 mod voice_catalog;
+mod web_fetch_api;
 
 use anyhow::bail;
 use config::Config;
