@@ -1,5 +1,43 @@
 # Changelog
 
+## Release hardening — 2026-09-19
+
+- Removed the Tailscale card from the dashboard API Endpoint page in the vendored
+  frontend (`EndpointPageClient.js`). Tunnel management is a declared native-parity
+  gap in this port and the card surfaced an unusable Enable flow; the Tunnel row,
+  security banners, and the `/api/tunnel/**` routes are unchanged.
+- Removed the Donate button and modal from the dashboard header (`Header.js`);
+  it pointed at the upstream project's donation links and has no role in this
+  Rust port.
+- Removed the 9Remote sidebar entry and promo modal from the dashboard
+  navigation (`Sidebar.js`); it advertised an upstream companion product that
+  this port does not ship or support.
+- The dashboard Quota Tracker no longer polls quota for inactive connections
+  (`ProviderLimits`); a seeded connection awaiting its free-tier key no longer
+  surfaces provider auth failures. The per-card Refresh button remains the
+  explicit path for inactive connections.
+
+- Updated `rustls` to `0.23.45` to remediate RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc.
+- Bound guarded search and web-fetch connections to the DNS addresses that were
+  validated, rejecting DNS failures and mixed public/private answers to close
+  the validation-to-connection rebinding window.
+- Aligned live Codex requests with the ChatGPT backend (`store: false`, no
+  unsupported output-limit field) and preserved or generated the stable session
+  identifier required by OpenCode Go.
+- Added scheduled and change-triggered RustSec/npm production dependency audits
+  plus weekly Dependabot update checks for Cargo, npm, and GitHub Actions.
+- Changed the direct Rust binary's default bind address from all interfaces to
+  loopback; public exposure now requires an explicit `NINEROUTER_HOST`.
+- Removed the API-key-shaped default from the live combo test and documented
+  that the vendored frontend-only Docker files are not a deployment path for
+  this Rust port.
+- Excluded all generated `.next*` trees from ESLint so release linting does not
+  traverse multi-gigabyte build/check output, disabled React Compiler-only
+  rules for this non-Compiler frontend, and made the default lint command an
+  actionable error gate.
+- Replaced the stale hand-maintained SHA-256 file with a reproducible manifest
+  of tracked release files and made strict CI reject a stale manifest.
+
 ## Unreleased — 2026-09-13
 
 - Updated the pinned upstream dashboard and provider catalog from 9Router `0.5.69` to `0.5.75` (`17c4cc76877bd1755030a8414f8d0083f48dcccf`).

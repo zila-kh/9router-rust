@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "updated": "2026-09-20T00:00:00Z",
+  "providers": [
+    {
+      "id": "kilo",
+      "class": "api",
+      "access": "anonymous",
+      "name": "Kilo Free Gateway",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "models": ["kilo-auto/free"],
+      "limits": { "requestsPerHourPerIp": 200 },
+      "status": "active"
+    },
+    {
+      "id": "groq",
+      "class": "api",
+      "access": "key",
+      "provider": "groq",
+      "name": "Groq",
+      "limits": { "rpm": 30, "rpd": 250 },
+      "signupUrl": "https://console.groq.com/keys",
+      "status": "active"
+    },
+    {
+      "id": "cerebras",
+      "class": "api",
+      "access": "key",
+      "provider": "cerebras",
+      "name": "Cerebras",
+      "signupUrl": "https://cloud.cerebras.ai",
+      "status": "active"
+    },
+    {
+      "id": "openrouter",
+      "class": "api",
+      "access": "key",
+      "provider": "openrouter",
+      "name": "OpenRouter Free Models",
+      "signupUrl": "https://openrouter.ai/keys",
+      "status": "active"
+    },
+    {
+      "id": "nvidia",
+      "class": "api",
+      "access": "key",
+      "provider": "nvidia",
+      "name": "NVIDIA NIM",
+      "limits": { "rpm": 40, "rpd": 10000 },
+      "signupUrl": "https://build.nvidia.com",
+      "status": "active"
+    },
+    {
+      "id": "cloudflare",
+      "class": "api",
+      "access": "key",
+      "provider": "cloudflare-ai",
+      "name": "Cloudflare Workers AI",
+      "signupUrl": "https://dash.cloudflare.com/profile/api-tokens",
+      "status": "active"
+    },
+    {
+      "id": "glm-cn",
+      "class": "api",
+      "access": "key",
+      "provider": "glm-cn",
+      "name": "Zhipu GLM bigmodel (free flash)",
+      "signupUrl": "https://open.bigmodel.cn",
+      "status": "active"
+    },
+    {
+      "id": "gemini",
+      "class": "api",
+      "access": "key",
+      "provider": "gemini",
+      "name": "Google AI Studio",
+      "signupUrl": "https://aistudio.google.com/app/apikey",
+      "status": "active"
+    },
+    {
+      "id": "mistral",
+      "class": "api",
+      "access": "key",
+      "provider": "mistral",
+      "name": "Mistral (free credits)",
+      "signupUrl": "https://console.mistral.ai/api-keys",
+      "status": "active"
+    }
+  ]
+}

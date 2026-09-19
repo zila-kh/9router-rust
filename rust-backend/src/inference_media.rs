@@ -144,8 +144,9 @@ pub async fn handle_v1_models_info(
 pub async fn handle_v1beta_models(
     state: &AppState,
     method: &Method,
+    consumer: bool,
 ) -> Result<Response<Body>, AppError> {
-    crate::model_catalog::handle_v1beta_models(state, method).await
+    crate::model_catalog::handle_v1beta_models(state, method, consumer).await
 }
 
 pub async fn handle_v1_api_chat(

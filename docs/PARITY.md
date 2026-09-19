@@ -82,7 +82,7 @@ The manifest intentionally declares these classes of non-parity:
 - MITM certificate/DNS manager;
 - CLI-tool host configuration APIs;
 - Headroom and PXPIPE lifecycle/management APIs;
-- Tailscale/cloudflared tunnel management;
+- Tailscale/cloudflared tunnel management; the dashboard Tailscale card is additionally removed from the vendored endpoint page UI (`EndpointPageClient.js`) because the flow cannot work in this port;
 - MCP endpoints;
 - native video generation/status adapters for the `xai`, `openrouter` and `vertex` wire formats are implemented, but the provider-account cooldown bookkeeping around them (`markAccountUnavailable` status/error fields, model locks, `allRateLimited` answers), `getProviderCredentials` strategy selection (round-robin/fill-first sticky counters, proxy pools, `noAuth` virtual connections) and the `401`/`403` refresh-and-retry branch (`refreshTokenByProvider`; the Vertex service-account mint is native) are not;
 - the chat-based web search path (`searchViaChat` providers) is native, with two deliberate deviations: `openai` and `vercel-ai-gateway` resolve their chat-search URL from the provider chat transport (their registry entries carry no `searchViaChat.endpoint`, where upstream's `searchEndpoint()` builds an empty string and the call cannot be made at all), and the provider-account cooldown/backoff bookkeeping around the route is still not persisted (the native route walks the active connections and returns the last error);

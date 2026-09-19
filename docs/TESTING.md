@@ -39,6 +39,12 @@ Verify `x-9router-runtime: rust`.
 
 Repeat with `"stream": true` and verify SSE framing and `[DONE]` where the caller format requires it.
 
+For a combo, repeat the same request with the combo name as `model`. A release
+acceptance result requires an HTTP 2xx response, `x-9router-runtime: rust`, a
+non-empty assistant reply, and—when streaming—SSE data plus `[DONE]`. A combo
+can still fail even when routing is correct if every member has an expired or
+invalid credential or refers to a provider with no active connection.
+
 ## Hybrid differential testing
 
 Run:

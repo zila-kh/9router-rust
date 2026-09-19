@@ -1,5 +1,12 @@
 # Docker
 
+> **Not a deployment path for this Rust port.** This file and the adjacent
+> `Dockerfile`/`docker-compose.yml` are retained from the pinned upstream
+> frontend snapshot. They start the legacy Next-only service and do not put the
+> Rust authentication and SSRF boundary in front of it. For this repository,
+> use the root production launcher documented in `../README.md`. Do not publish
+> or expose the frontend container by itself.
+
 Run 9Router in a container. Published image: [`decolua/9router`](https://hub.docker.com/r/decolua/9router) — multi-platform `linux/amd64` + `linux/arm64`.
 
 ---

@@ -371,7 +371,7 @@ fn insert_header(
     }
 }
 
-fn rust_gateway_supports_provider(provider: &str) -> bool {
+pub(crate) fn rust_gateway_supports_provider(provider: &str) -> bool {
     let transport = providers::transport(provider);
     matches!(
         transport

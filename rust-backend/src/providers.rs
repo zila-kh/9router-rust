@@ -264,9 +264,15 @@ fn resolve_for_provider(
 ) -> Result<ResolvedModel, AppError> {
     let provider = canonical_provider(p);
     let conns = state.db.provider_connections(Some(&provider), Some(true))?;
-    let connection = conns.into_iter().next().ok_or_else(|| {
-        AppError::NotFound(format!("no active connection for provider {provider}"))
-    })?;
+    let connection = conns
+        .into_iter()
+        .next()
+        // Registry-served virtual free-tier providers have no database rows:
+        // their connection is synthesized from the online free-registry.
+        .or_else(|| crate::free_tier::virtual_connection(state, &provider))
+        .ok_or_else(|| {
+            AppError::NotFound(format!("no active connection for provider {provider}"))
+        })?;
     let upstream = model_upstream_id(&provider, model).unwrap_or_else(|| model.to_string());
     Ok(ResolvedModel {
         requested: requested.into(),

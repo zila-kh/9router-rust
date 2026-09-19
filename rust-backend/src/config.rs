@@ -24,7 +24,9 @@ impl Config {
             Ok(value) => value
                 .parse()
                 .with_context(|| format!("invalid NINEROUTER_HOST value: {value}"))?,
-            Err(env::VarError::NotPresent) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            // Safe direct-binary default. Public exposure must be an explicit
+            // deployment choice through NINEROUTER_HOST.
+            Err(env::VarError::NotPresent) => default_listen_host(),
             Err(error) => return Err(error).context("NINEROUTER_HOST is not valid Unicode"),
         };
         let port = match env::var("PORT") {
@@ -104,6 +106,10 @@ fn parse_port(name: &str, value: &str) -> anyhow::Result<u16> {
         bail!("{name} must be between 1 and 65535");
     }
     Ok(port)
+}
+
+fn default_listen_host() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
 }
 
 fn validate_loopback_origin(name: &str, value: String) -> anyhow::Result<String> {
@@ -197,5 +203,10 @@ mod tests {
         assert!(parse_port("PORT", "0").is_err());
         assert!(parse_port("PORT", "65536").is_err());
         assert!(parse_port("PORT", "not-a-port").is_err());
+    }
+
+    #[test]
+    fn direct_binary_defaults_to_loopback() {
+        assert!(default_listen_host().is_loopback());
     }
 }

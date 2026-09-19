@@ -64,3 +64,16 @@ audit of every provider or dashboard feature.
 
 Verdict: the focused fixes improve reliability, but the remaining security and
 provider acceptance work prevents a production stability sign-off.
+
+## Follow-up — 2026-09-19
+
+The DNS validation/connection race above is addressed in the current working
+candidate. Guarded search and web-fetch requests now create a direct client per
+hop, pin the hostname to the complete set of validated public addresses, reject
+DNS failures or mixed public/private answers, and repeat the process for every
+same-origin redirect. Ambient HTTP proxies are deliberately bypassed for these
+user-influenced fetches because proxy-side DNS would reintroduce an unchecked
+resolution step.
+
+The remaining provider-account, real-provider, HTTPS reverse-proxy, platform,
+and native-parity acceptance risks still apply.

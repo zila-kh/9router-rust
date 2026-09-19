@@ -157,3 +157,7 @@ For a true 100%-native release gate:
 ## Parity status
 
 Compatibility mode restores broad dashboard and endpoint functionality, but it does not mean every behavior has been rewritten in Rust. `rust-backend/parity/routes.json` and `docs/PARITY.md` remain the source of truth for native coverage. The 100%-native release gate is expected to fail until all listed route and semantic gaps are removed.
+
+## License
+
+This repository is available under the [MIT License](LICENSE).

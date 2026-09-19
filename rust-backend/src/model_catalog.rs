@@ -124,8 +124,9 @@ pub async fn handle_model_info(
 
 /// `GET /v1beta/models` — Gemini-compatible list built from every catalog model.
 pub async fn handle_v1beta_models(
-    _state: &AppState,
+    state: &AppState,
     method: &Method,
+    consumer: bool,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
         return json_response(
@@ -133,10 +134,29 @@ pub async fn handle_v1beta_models(
             json!({"error": "Method Not Allowed"}),
         );
     }
-    json_response(StatusCode::OK, json!({"models": v1beta_models()}))
+    let models = if !consumer {
+        v1beta_models()
+    } else if crate::free_tier::enabled(state) {
+        vec![json!({
+            "name": "models/combo-free",
+            "displayName": "9Router Free Tier",
+            "description": "Requests are routed to third-party free providers; do not send confidential or personal data.",
+            "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+            "inputTokenLimit": 128000,
+            "outputTokenLimit": 8192,
+        })]
+    } else {
+        let hidden = crate::free_tier::hidden_providers(state);
+        v1beta_models_with_hidden(Some(&hidden))
+    };
+    json_response(StatusCode::OK, json!({"models": models}))
 }
 
 fn v1beta_models() -> Vec<Value> {
+    v1beta_models_with_hidden(None)
+}
+
+fn v1beta_models_with_hidden(hidden: Option<&HashSet<String>>) -> Vec<Value> {
     let mut models = Vec::new();
     let mut seen = HashSet::new();
     let mut add = |name: String, display_name: String, description: String, methods: Vec<&str>| {
@@ -157,6 +177,11 @@ fn v1beta_models() -> Vec<Value> {
         .and_then(Value::as_object)
     {
         for (provider, provider_models) in entries {
+            if hidden
+                .is_some_and(|hidden| hidden.contains(&providers::canonical_provider(provider)))
+            {
+                continue;
+            }
             let Some(items) = provider_models.as_array() else {
                 continue;
             };

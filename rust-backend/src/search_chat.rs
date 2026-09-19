@@ -1081,7 +1081,7 @@ pub fn parse_upstream_response(status: u16, text: &str) -> Result<Value, Outcome
 /// Upstream `handleChatSearch`: one chat-completion round trip turned into the
 /// unified `/v1/search` envelope.
 pub async fn handle(
-    state: &AppState,
+    _state: &AppState,
     provider_id: &str,
     query: &str,
     max_results: Option<&Value>,
@@ -1119,8 +1119,7 @@ pub async fn handle(
     };
 
     let upstream_started = Instant::now();
-    let response = match ssrf_guard::fetch_public(&state.proxy_http, &prepared.url, &request).await
-    {
+    let response = match ssrf_guard::fetch_public(&prepared.url, &request).await {
         Ok(response) => response,
         Err(failure) => return fetch_failure_outcome(&failure),
     };

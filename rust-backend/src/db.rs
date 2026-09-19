@@ -1242,7 +1242,7 @@ fn usage_cutoff(period: &str) -> Result<Option<String>, AppError> {
 
 pub fn merge_settings_defaults(mut raw: Value) -> Value {
     let defaults = json!({
-      "cloudEnabled":false,"tunnelEnabled":false,"tunnelUrl":"","tunnelProvider":"cloudflare","tailscaleEnabled":false,"tailscaleUrl":"",
+      "cloudEnabled":false,"tunnelEnabled":false,"tunnelUrl":"","tunnelProvider":"cloudflare","tailscaleEnabled":false,"tailscaleUrl":"","builtinFreeCombo":true,
       "stickyRoundRobinLimit":3,"providerStrategies":{},"quotaVisibility":{},"comboStrategy":"fallback","comboStickyRoundRobinLimit":1,"comboStrategies":{},
       "capacityAdapter":{"vision":{"enabled":true,"roundRobin":false,"models":[]},"pdf":{"enabled":false,"roundRobin":false,"models":[]},"audioInput":{"enabled":true,"roundRobin":false,"models":[]},"videoInput":{"enabled":false,"roundRobin":false,"models":[]}},
       "requireLogin":true,"requireApiKey":true,"tunnelDashboardAccess":true,"authMode":"password","ssoType":"oidc","oidcIssuerUrl":"","oidcClientId":"","oidcClientSecret":"","oidcScopes":"openid profile email","oidcLoginLabel":"Sign in with OIDC",

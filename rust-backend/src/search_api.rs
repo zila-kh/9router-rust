@@ -1561,7 +1561,7 @@ fn request_timeout_ms(config: &Value, started: Instant) -> u64 {
 
 /// Upstream `tryDedicatedProvider`.
 async fn try_dedicated_provider(
-    state: &AppState,
+    _state: &AppState,
     provider_id: &str,
     provider_config: &Value,
     body: &Value,
@@ -1669,7 +1669,7 @@ async fn try_dedicated_provider(
         timeout_ms: Some(timeout_ms),
     };
 
-    let response = match ssrf_guard::fetch_public(&state.proxy_http, &built.url, &request).await {
+    let response = match ssrf_guard::fetch_public(&built.url, &request).await {
         Ok(response) => response,
         Err(failure) => {
             let is_timeout = matches!(failure, FetchFailure::Timeout);

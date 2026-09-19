@@ -23,6 +23,7 @@ mod compat_proxy;
 mod config;
 mod db;
 mod error;
+mod free_tier;
 mod gateway;
 mod inference_media;
 mod legacy_proxy;
@@ -73,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
     seed_initial_password(&db)?;
     let addr: SocketAddr = cfg.listen;
     let state = AppState::new(cfg, db)?;
+    free_tier::init(&state);
+    free_tier::start_sync_loop(state.clone());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(
         %addr,

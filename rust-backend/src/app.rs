@@ -213,15 +213,17 @@ async fn handle_management(
 }
 
 fn native_in_compat_mode(method: &Method, path: &str) -> bool {
-    matches!(
-        (method.as_str(), path),
-        ("GET", "/api/rust/parity")
-            | ("GET", "/api/settings/require-login")
-            | ("POST", "/api/auth/login")
-            | ("POST", "/api/auth/logout")
-            | ("GET", "/api/auth/status")
-            | ("POST", "/api/auth/reset-password")
-    )
+    path == "/api/free-tier"
+        || path.starts_with("/api/free-tier/")
+        || matches!(
+            (method.as_str(), path),
+            ("GET", "/api/rust/parity")
+                | ("GET", "/api/settings/require-login")
+                | ("POST", "/api/auth/login")
+                | ("POST", "/api/auth/logout")
+                | ("GET", "/api/auth/status")
+                | ("POST", "/api/auth/reset-password")
+        )
 }
 
 fn is_public_management_request(method: &Method, path: &str) -> bool {

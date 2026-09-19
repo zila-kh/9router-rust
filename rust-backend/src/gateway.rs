@@ -74,19 +74,60 @@ pub async fn handle(
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
         let method = req.method().clone();
         let query = req.uri().query().map(str::to_string);
+        if api_key_consumer(&state, req.headers(), query_key.as_deref()) {
+            let id = query.as_deref().and_then(|query| {
+                url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(key, _)| key == "id")
+                    .map(|(_, value)| value.into_owned())
+            });
+            if id.as_deref() == Some(crate::free_tier::FREE_COMBO_MODEL)
+                && crate::free_tier::enabled(&state)
+            {
+                return json_response(
+                    StatusCode::OK,
+                    json!({
+                        "id": crate::free_tier::FREE_COMBO_MODEL,
+                        "name": "9Router Free Tier",
+                        "kind": "llm",
+                        "owned_by": "9router",
+                        "endpoint": "/v1/chat/completions",
+                        "description": "Requests are routed to third-party free providers; do not send confidential or personal data.",
+                    }),
+                );
+            }
+            if let Some(model) = id
+                .as_deref()
+                .and_then(|id| crate::free_tier::exposed_virtual_model_info(&state, id))
+            {
+                return json_response(StatusCode::OK, model);
+            }
+            if id.as_deref().is_some_and(|id| {
+                (crate::free_tier::enabled(&state)
+                    && !crate::free_tier::is_exposed_model(&state, id))
+                    || crate::free_tier::is_hidden_model(&state, id)
+            }) {
+                let id = id.unwrap_or_default();
+                return json_response(
+                    StatusCode::NOT_FOUND,
+                    json!({"error":{"message":format!("Model not found: {id}"),"type":"not_found"}}),
+                );
+            }
+        }
         return crate::inference_media::handle_v1_models_info(&state, &method, query.as_deref())
             .await;
     }
     if is_v1beta_models_path(&path) {
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
         let method = req.method().clone();
-        return crate::inference_media::handle_v1beta_models(&state, &method).await;
+        let consumer = api_key_consumer(&state, req.headers(), query_key.as_deref());
+        return crate::inference_media::handle_v1beta_models(&state, &method, consumer).await;
     }
     if is_models_path(&path) && req.method() == axum::http::Method::GET {
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
         let method = req.method().clone();
         let headers = req.headers().clone();
-        return crate::models_list::handle_models(&state, &method, &path, &headers).await;
+        let consumer = api_key_consumer(&state, &headers, query_key.as_deref());
+        return crate::models_list::handle_models(&state, &method, &path, &headers, consumer).await;
     }
     if is_videos_path(&path) {
         authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
@@ -127,6 +168,7 @@ pub async fn handle(
     }
 
     authorize_llm(&state, peer, req.headers(), query_key.as_deref())?;
+    let consumer = api_key_consumer(&state, req.headers(), query_key.as_deref());
     let caller = if compact {
         Format::Responses
     } else {
@@ -157,6 +199,11 @@ pub async fn handle(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::BadRequest("model is required".into()))?
         .to_string();
+    if consumer && !consumer_target_allowed(&state, &requested, &requested) {
+        return Err(AppError::NotFound(format!(
+            "The model '{requested}' does not exist or you do not have access to it."
+        )));
+    }
 
     // Existing combos always win. Auto-routing is intentionally a virtual-model
     // feature and never changes explicit model, alias, combo, or provider behavior.
@@ -173,6 +220,9 @@ pub async fn handle(
 
     let mut last_error: Option<AppError> = None;
     for target in targets {
+        if consumer && !consumer_target_allowed(&state, &requested, &target) {
+            continue;
+        }
         canonical["model"] = Value::String(target.clone());
         match execute_target(
             &state,
@@ -186,6 +236,7 @@ pub async fn handle(
         .await
         {
             Ok(mut resp) => {
+                crate::free_tier::note_result(&state, &target, true);
                 if let Some(plan) = auto_plan.as_ref() {
                     auto_router::record_stream_estimate_if_passthrough(
                         &state,
@@ -200,6 +251,7 @@ pub async fn handle(
                 return Ok(resp);
             }
             Err(e) => {
+                crate::free_tier::note_result(&state, &target, false);
                 tracing::warn!(model=%target, error=%e, "model candidate failed");
                 if auto_plan.is_some() && !e.auto_route_retryable() {
                     tracing::warn!(model=%target, "auto-router stopped fallback on non-retryable error");
@@ -220,6 +272,22 @@ pub(crate) fn authorize_llm(
     query_key: Option<&str>,
 ) -> Result<(), AppError> {
     auth::require_llm(state, headers, peer, query_key)
+}
+
+fn api_key_consumer(state: &AppState, headers: &HeaderMap, query_key: Option<&str>) -> bool {
+    !auth::has_valid_cli_token(state, headers)
+        && !auth::has_valid_dashboard_session(state, headers)
+        && auth::extract_api_key(headers, query_key).is_some()
+}
+
+fn consumer_target_allowed(state: &AppState, requested: &str, target: &str) -> bool {
+    if requested == crate::free_tier::FREE_COMBO_MODEL {
+        return crate::free_tier::enabled(state);
+    }
+    if crate::free_tier::enabled(state) && !crate::free_tier::is_exposed_model(state, requested) {
+        return false;
+    }
+    !crate::free_tier::is_hidden_model(state, target)
 }
 
 /// `/v1/models` and its sub-routes — the kind listing (`/v1/models/image`) and
@@ -333,6 +401,12 @@ fn request_wants_stream(
 }
 
 fn combo_targets(state: &AppState, requested: &str) -> Result<Vec<String>, AppError> {
+    if requested == crate::free_tier::FREE_COMBO_MODEL {
+        if crate::free_tier::enabled(state) {
+            return crate::free_tier::pool_targets(state);
+        }
+        return Err(AppError::NotFound("combo-free is disabled".into()));
+    }
     expand_combo_targets(&state.db.combos()?, requested)
 }
 
@@ -441,9 +515,25 @@ async fn execute_target(
     compact: bool,
 ) -> Result<Response<Body>, AppError> {
     let resolved = providers::resolve_model(state, target)?;
-    let connections = state
-        .db
-        .provider_connections(Some(&resolved.provider), Some(true))?;
+    // Custom transports need their dedicated executor.  Never let an explicit
+    // model or combo bypass the same executability guard used by auto-routing:
+    // treating (for example) Antigravity as generic OpenAI sends the wrong body
+    // to the provider's base URL and turns an unsupported route into slow 404s.
+    require_executable_provider(&resolved.provider)?;
+    let connections = if crate::free_tier::is_virtual_provider(&resolved.provider) {
+        vec![
+            crate::free_tier::virtual_connection(state, &resolved.provider).ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "free-tier member {} is not available",
+                    resolved.provider
+                ))
+            })?,
+        ]
+    } else {
+        state
+            .db
+            .provider_connections(Some(&resolved.provider), Some(true))?
+    };
     if connections.is_empty() {
         return Err(AppError::NotFound(format!(
             "no active connection for provider {}",
@@ -466,9 +556,13 @@ async fn execute_target(
         )
         .await
         {
-            Ok(r) => return Ok(r),
+            Ok(r) => {
+                crate::free_tier::note_result(state, target, true);
+                return Ok(r);
+            }
             Err(e) => {
                 tracing::warn!(provider=%resolved.provider, model=%resolved.model, error=%e, "provider account failed");
+                crate::free_tier::note_result(state, target, false);
                 last = Some(e);
             }
         }
@@ -476,6 +570,15 @@ async fn execute_target(
     Err(last.unwrap_or_else(|| {
         AppError::Upstream(format!("all accounts failed for {}", resolved.provider))
     }))
+}
+
+fn require_executable_provider(provider: &str) -> Result<(), AppError> {
+    if auto_router::rust_gateway_supports_provider(provider) {
+        return Ok(());
+    }
+    Err(AppError::NotFound(format!(
+        "provider {provider} requires a dedicated transport executor that is not available in the native Rust gateway"
+    )))
 }
 
 async fn execute_connection(
@@ -531,6 +634,7 @@ async fn execute_connection(
     let provider_format = Format::from_provider(transport_format);
     let mut upstream_body = translate::provider_request(canonical.clone(), provider_format)?;
     upstream_body["model"] = Value::String(model.to_string());
+    apply_provider_body_requirements(provider, &mut upstream_body);
 
     let force_stream = transport
         .get("forceStream")
@@ -653,6 +757,20 @@ pub(crate) fn build_format_url(base: &str, format: Format, model: &str, stream: 
     }
 }
 
+fn apply_provider_body_requirements(provider: &str, body: &mut Value) {
+    // ChatGPT's Codex Responses endpoint rejects stored responses. The
+    // official CLI always sends this explicitly, so enforce it even when the
+    // caller used the Chat Completions shape and had no `store` field.
+    if provider == "codex" {
+        body["store"] = Value::Bool(false);
+        if let Some(object) = body.as_object_mut() {
+            // The ChatGPT Codex backend controls output limits itself and
+            // rejects the public Responses API's max_output_tokens field.
+            object.remove("max_output_tokens");
+        }
+    }
+}
+
 fn build_upstream_request(
     state: &AppState,
     provider: &str,
@@ -695,6 +813,24 @@ fn build_upstream_request(
             reqwest::header::HeaderName::from_static("anthropic-version"),
             reqwest::header::HeaderValue::from_static("2023-06-01"),
         );
+    }
+    if provider == "opencode-go" {
+        let session = client_headers
+            .get("x-opencode-session")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        h.insert(
+            reqwest::header::HeaderName::from_static("x-opencode-session"),
+            reqwest::header::HeaderValue::from_str(&session)
+                .map_err(|e| AppError::Internal(e.into()))?,
+        );
+        h.entry(reqwest::header::USER_AGENT)
+            .or_insert(reqwest::header::HeaderValue::from_static(concat!(
+                "9router-rust/",
+                env!("CARGO_PKG_VERSION")
+            )));
     }
     for name in ["x-request-id", "user-agent"] {
         if let Some(v) = client_headers.get(name) {
@@ -781,6 +917,51 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod compact_tests {
     use super::*;
+
+    fn test_state(temp: &tempfile::TempDir) -> AppState {
+        let db_path = temp.path().join("test.sqlite");
+        let db = crate::db::Db::open(&db_path).unwrap();
+        AppState::new(
+            crate::config::Config {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                ui_origin: "http://127.0.0.1:20129".into(),
+                data_dir: temp.path().to_path_buf(),
+                db_path,
+                upstream_timeout_secs: 1,
+                ui_only_header_secret: "test-only".into(),
+                legacy_backend_origin: None,
+                compat_api_enabled: false,
+            },
+            db,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn combo_members_route_internally_and_only_expose_directly_on_opt_in() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = test_state(&temp);
+        let target = "openai-compatible-free-kilo/kilo-auto/free";
+        assert!(consumer_target_allowed(
+            &state,
+            crate::free_tier::FREE_COMBO_MODEL,
+            target
+        ));
+        assert!(!consumer_target_allowed(&state, target, target));
+
+        crate::free_tier::set_exposed(&state, "kilo", true).unwrap();
+        assert!(consumer_target_allowed(&state, target, target));
+        state
+            .db
+            .update_settings(json!({"builtinFreeCombo":false}))
+            .unwrap();
+        assert!(!consumer_target_allowed(
+            &state,
+            crate::free_tier::FREE_COMBO_MODEL,
+            target
+        ));
+        assert!(consumer_target_allowed(&state, target, target));
+    }
 
     #[tokio::test]
     async fn model_test_resolves_nested_combo_before_provider_lookup() {
@@ -916,5 +1097,90 @@ mod compact_tests {
         assert!(!is_models_path("/v1/v1/models"));
         assert!(!is_models_path("/v1/models-extra"));
         assert!(!is_models_path("/v1beta/models"));
+    }
+
+    #[test]
+    fn opencode_go_preserves_or_generates_a_session_header() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test.sqlite");
+        let db = crate::db::Db::open(&db_path).unwrap();
+        let state = AppState::new(
+            crate::config::Config {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                ui_origin: "http://127.0.0.1:20129".into(),
+                data_dir: temp.path().to_path_buf(),
+                db_path,
+                upstream_timeout_secs: 1,
+                ui_only_header_secret: "test-only".into(),
+                legacy_backend_origin: None,
+                compat_api_enabled: false,
+            },
+            db,
+        )
+        .unwrap();
+        let transport = json!({"format":"openai"});
+        let connection = json!({"apiKey":"test-key"});
+        let body = json!({"model":"test", "messages":[]});
+
+        let generated = build_upstream_request(
+            &state,
+            "opencode-go",
+            &transport,
+            &connection,
+            &HeaderMap::new(),
+            "https://example.invalid/v1/chat/completions",
+            &body,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert!(generated.headers().contains_key("x-opencode-session"));
+        assert_eq!(
+            generated.headers()[reqwest::header::USER_AGENT],
+            concat!("9router-rust/", env!("CARGO_PKG_VERSION"))
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-opencode-session",
+            HeaderValue::from_static("stable-session"),
+        );
+        let preserved = build_upstream_request(
+            &state,
+            "opencode-go",
+            &transport,
+            &connection,
+            &headers,
+            "https://example.invalid/v1/chat/completions",
+            &body,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert_eq!(preserved.headers()["x-opencode-session"], "stable-session");
+    }
+
+    #[test]
+    fn codex_requests_never_enable_upstream_storage() {
+        for initial in [
+            json!({"max_output_tokens":16}),
+            json!({"store":true, "max_output_tokens":16}),
+        ] {
+            let mut body = initial;
+            apply_provider_body_requirements("codex", &mut body);
+            assert_eq!(body["store"], false);
+            assert!(body.get("max_output_tokens").is_none());
+        }
+        let mut other = json!({"store":true, "max_output_tokens":16});
+        apply_provider_body_requirements("openai", &mut other);
+        assert_eq!(other["store"], true);
+        assert_eq!(other["max_output_tokens"], 16);
+    }
+
+    #[test]
+    fn explicit_models_and_combos_reject_unported_custom_transports() {
+        assert!(require_executable_provider("codex").is_ok());
+        let error = require_executable_provider("antigravity").unwrap_err();
+        assert!(error.to_string().contains("dedicated transport executor"));
     }
 }

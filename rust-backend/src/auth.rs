@@ -384,6 +384,16 @@ pub fn require_dashboard(state: &AppState, headers: &HeaderMap) -> Result<(), Ap
     }
 }
 
+/// Free-tier administration is always restricted to an authenticated dashboard
+/// session or the local CLI token, even when dashboard login is disabled.
+pub fn require_dashboard_admin(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
+    if has_valid_cli_token(state, headers) || has_valid_dashboard_session(state, headers) {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized)
+    }
+}
+
 #[allow(dead_code)]
 pub fn require_llm(
     state: &AppState,
@@ -546,5 +556,35 @@ mod tests {
         assert!(valid_session_header(&valid));
         assert!(!valid_session_header(&wrong_algorithm));
         assert!(!valid_session_header(&critical));
+    }
+
+    #[test]
+    fn admin_gate_requires_a_real_session_even_when_dashboard_login_is_disabled() {
+        let temp = tempfile::tempdir().expect("temporary data directory");
+        let config = crate::config::Config {
+            listen: "127.0.0.1:20130".parse().expect("valid listen address"),
+            ui_origin: "http://127.0.0.1:20129".into(),
+            data_dir: temp.path().to_path_buf(),
+            db_path: temp.path().join("data.sqlite"),
+            upstream_timeout_secs: 1,
+            ui_only_header_secret: "test-secret".into(),
+            legacy_backend_origin: None,
+            compat_api_enabled: false,
+        };
+        let db = crate::db::Db::open(&config.db_path).expect("test database");
+        db.update_settings(json!({"requireLogin": false}))
+            .expect("disable general dashboard login");
+        let state = AppState::new(config, db).expect("test app state");
+
+        assert!(require_dashboard_admin(&state, &HeaderMap::new()).is_err());
+
+        let token =
+            create_session_token(&state, serde_json::Map::new()).expect("create dashboard session");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("auth_token={token}")).expect("valid session cookie"),
+        );
+        assert!(require_dashboard_admin(&state, &headers).is_ok());
     }
 }

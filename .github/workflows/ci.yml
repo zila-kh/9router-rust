@@ -61,3 +61,7 @@ jobs:
         env:
           NINEROUTER_UI_ONLY: '1'
           NEXT_TELEMETRY_DISABLED: '1'
+      - name: Lint frontend
+        if: steps.frontend.outputs.present == 'true'
+        working-directory: frontend
+        run: npm run lint

@@ -37,7 +37,7 @@ The built-in profiles are designed for an account where high-volume models shoul
 - `cx/gpt-6-astra`: scarce escalation for only the highest-risk or highest-complexity work.
 - `ag/gemini-3.8-flash-high`: profile is retained for the intended high-volume policy, but the native Rust gateway currently skips it because Antigravity requires a dedicated executor that has not yet been ported.
 
-A profile must resolve to a model **and** use a transport executable by the native Rust gateway. Unsupported custom transports are excluded before scoring rather than being selected and failing at dispatch.
+A profile must resolve to a model **and** use a transport executable by the native Rust gateway. Unsupported custom transports are excluded before scoring rather than being selected and failing at dispatch. The same guard also applies to explicit models and combo members, so they fail over locally instead of issuing malformed generic HTTP requests.
 
 If Gemini should participate today, configure a Gemini profile that resolves through a Rust-supported transport. Otherwise port the upstream Antigravity executor before relying on the built-in `ag/...` profile.
 

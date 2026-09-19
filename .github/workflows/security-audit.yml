@@ -1,0 +1,46 @@
+name: Dependency security audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - rust-backend/Cargo.toml
+      - rust-backend/Cargo.lock
+      - frontend/package.json
+      - frontend/package-lock.json
+      - .github/workflows/security-audit.yml
+  pull_request:
+    paths:
+      - rust-backend/Cargo.toml
+      - rust-backend/Cargo.lock
+      - frontend/package.json
+      - frontend/package-lock.json
+      - .github/workflows/security-audit.yml
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RustSec audit tool
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit Rust dependencies
+        run: cargo audit --file rust-backend/Cargo.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Audit production frontend dependencies
+        run: npm --prefix frontend audit --omit=dev --audit-level=high

@@ -42,7 +42,12 @@ export default function LoginPage() {
 
         if (res.ok) {
           const data = await res.json();
-          if (data.authenticated === true || data.requireLogin === false) {
+          const adminLoginRequested =
+            new URLSearchParams(window.location.search).get("admin") === "1";
+          if (
+            data.authenticated === true ||
+            (data.requireLogin === false && !adminLoginRequested)
+          ) {
             window.location.assign("/dashboard");
             return;
           }

@@ -414,6 +414,9 @@ pub async fn build_models_list(
         let Some(name) = combo.get("name").and_then(Value::as_str) else {
             continue;
         };
+        if name == crate::free_tier::FREE_COMBO_MODEL {
+            continue;
+        }
         let mut entry = json!({"id": name, "object": "model", "owned_by": "combo"});
         let combo_kind = combo.get("kind").and_then(Value::as_str).unwrap_or("");
         if combo_kind == "webSearch" || combo_kind == "webFetch" {
@@ -816,6 +819,7 @@ pub async fn handle_models(
     method: &Method,
     path: &str,
     headers: &HeaderMap,
+    consumer: bool,
 ) -> Result<Response<Body>, AppError> {
     if method != Method::GET {
         return json_response(
@@ -830,17 +834,26 @@ pub async fn handle_models(
 
     match models_route(path) {
         ModelsRoute::List => {
-            let data = build_models_list(state, &[LLM_KIND], skip_dynamic_fetch).await?;
+            let mut data = build_models_list(state, &[LLM_KIND], skip_dynamic_fetch).await?;
+            if consumer {
+                filter_free_tier_models(state, &mut data, &[LLM_KIND]);
+            }
             json_response(StatusCode::OK, json!({"object": "list", "data": data}))
         }
         ModelsRoute::Kinds(kinds) => {
-            let data = build_models_list(state, kinds, skip_dynamic_fetch).await?;
+            let mut data = build_models_list(state, kinds, skip_dynamic_fetch).await?;
+            if consumer {
+                filter_free_tier_models(state, &mut data, kinds);
+            }
             json_response(StatusCode::OK, json!({"object": "list", "data": data}))
         }
         ModelsRoute::Lookup(identifier) => {
             // Single-model lookup over the same LLM list; the dynamic fetch is
             // never skipped here, matching upstream.
-            let models = build_models_list(state, &[LLM_KIND], false).await?;
+            let mut models = build_models_list(state, &[LLM_KIND], false).await?;
+            if consumer {
+                filter_free_tier_models(state, &mut models, &[LLM_KIND]);
+            }
             let matched = models.into_iter().find(|candidate| {
                 candidate.get("id").and_then(Value::as_str) == Some(identifier.as_str())
             });
@@ -859,12 +872,103 @@ pub async fn handle_models(
     }
 }
 
+fn filter_free_tier_models(state: &AppState, models: &mut Vec<Value>, kinds: &[&str]) {
+    if crate::free_tier::enabled(state) {
+        models.clear();
+        if kinds.contains(&LLM_KIND) {
+            models.push(json!({
+                "id": crate::free_tier::FREE_COMBO_MODEL,
+                "object": "model",
+                "owned_by": "9router",
+                "description": "Requests are routed to third-party free providers; do not send confidential or personal data.",
+            }));
+        }
+        return;
+    }
+    let hidden = crate::free_tier::hidden_providers(state);
+    models.retain(|model| {
+        if model.get("id").and_then(Value::as_str) == Some(crate::free_tier::FREE_COMBO_MODEL) {
+            return false;
+        }
+        let owner = model.get("owned_by").and_then(Value::as_str).map(|owner| {
+            alias_to_provider_id()
+                .get(owner)
+                .cloned()
+                .unwrap_or_else(|| providers::canonical_provider(owner))
+        });
+        let id_provider = model
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| id.split_once('/').map(|(provider, _)| provider))
+            .map(|provider| {
+                alias_to_provider_id()
+                    .get(provider)
+                    .cloned()
+                    .unwrap_or_else(|| providers::canonical_provider(provider))
+            });
+        !owner.is_some_and(|provider| hidden.contains(&provider))
+            && !id_provider.is_some_and(|provider| hidden.contains(&provider))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{config::Config, db::Db, state::AppState};
+    use tempfile::TempDir;
 
     fn kinds(kinds: &[&str]) -> Vec<String> {
         kinds.iter().map(|kind| kind.to_string()).collect()
+    }
+
+    fn test_state(temp: &TempDir) -> AppState {
+        let db_path = temp.path().join("data.sqlite");
+        let db = Db::open(&db_path).unwrap();
+        AppState::new(
+            Config {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                ui_origin: "http://127.0.0.1:20129".into(),
+                data_dir: temp.path().to_path_buf(),
+                db_path,
+                upstream_timeout_secs: 1,
+                ui_only_header_secret: "test-only".into(),
+                legacy_backend_origin: None,
+                compat_api_enabled: false,
+            },
+            db,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn consumer_models_hide_managed_members_and_expose_one_virtual_combo() {
+        let temp = TempDir::new().unwrap();
+        let state = test_state(&temp);
+        let mut models = vec![
+            json!({"id":"groq/llama", "owned_by":"groq"}),
+            json!({"id":"openai/gpt", "owned_by":"openai"}),
+            json!({"id":"combo-free", "owned_by":"combo"}),
+        ];
+        filter_free_tier_models(&state, &mut models, &[LLM_KIND]);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "combo-free");
+
+        state
+            .db
+            .update_settings(json!({"builtinFreeCombo":false}))
+            .unwrap();
+        let mut models = vec![
+            json!({"id":"groq/llama", "owned_by":"groq"}),
+            json!({"id":"openai/gpt", "owned_by":"openai"}),
+        ];
+        filter_free_tier_models(&state, &mut models, &[LLM_KIND]);
+        assert!(!models.iter().any(|model| model["id"] == "groq/llama"));
+        assert!(models.iter().any(|model| model["id"] == "openai/gpt"));
+        assert!(!models.iter().any(|model| model["id"] == "combo-free"));
+        crate::free_tier::set_exposed(&state, "groq", true).unwrap();
+        let mut models = vec![json!({"id":"groq/llama", "owned_by":"groq"})];
+        filter_free_tier_models(&state, &mut models, &[LLM_KIND]);
+        assert!(models.iter().any(|model| model["id"] == "groq/llama"));
     }
 
     #[test]

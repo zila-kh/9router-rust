@@ -4,23 +4,26 @@ This is a release gate, not a claim that all providers, platforms, or upstream f
 
 ## Automated gates
 
-Run the regular CI, Full-stack CI, Strict Rust monorepo verification, and Strict full-stack v2 workflows on the candidate. They must verify the actual committed source, not a previous commit or an uncommitted patch on a runner.
+Run the regular CI, Full-stack CI, Strict Rust monorepo verification, Strict full-stack v2, and Dependency security audit workflows on the candidate. They must verify the actual committed source, not a previous commit or an uncommitted patch on a runner.
 
 The targeted regressions are:
 
 ```bash
 node scripts/test-release-boundaries.mjs
+node scripts/update-manifest.mjs --check
 python3 scripts/test-storage-paths.py
 bash scripts/test-frontend-materialization.sh
 cargo fmt --manifest-path rust-backend/Cargo.toml --all -- --check
 cargo clippy --locked --manifest-path rust-backend/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path rust-backend/Cargo.toml --all-targets
+cargo audit --file rust-backend/Cargo.lock
 npm --prefix frontend ci
+npm --prefix frontend run lint
 NINEROUTER_UI_ONLY=1 npm --prefix frontend run build
 npm --prefix frontend audit --omit=dev --audit-level=high
 ```
 
-Inspect the complete advisory report as well as its exit status. The high-severity gate is not evidence of zero lower-severity advisories. The reviewed DOMPurify override is retained when the frontend is rematerialized; do not remove it or blindly run `npm audit fix --force` to downgrade unrelated packages.
+Inspect both complete advisory reports as well as their exit status. The npm high-severity gate is not evidence of zero lower-severity advisories. The reviewed DOMPurify override is retained when the frontend is rematerialized; do not remove it or blindly run `npm audit fix --force` to downgrade unrelated packages.
 
 The path fixtures cover equivalent escaped routing characters, malformed escapes, dot segments, duplicate slashes, trailing slashes, and preservation of query strings and reserved model-ID escapes. The guard tests include both denied local operations and allowed remote-safe operations. Router tests reject malformed or non-object JSON without panicking. Storage tests exercise actual launcher preflight paths using disposable fixtures without starting servers.
 

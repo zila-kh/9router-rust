@@ -23,7 +23,9 @@ pub async fn handle(
     let method = req.method().clone();
     let headers = req.headers().clone();
     let uri = req.uri().clone();
-    if !is_public(&method, &path) {
+    if is_free_tier_admin_route(&path) {
+        auth::require_dashboard_admin(&state, &headers)?;
+    } else if !is_public(&method, &path) {
         auth::require_dashboard(&state, &headers)?;
     }
     if method == Method::GET && path == "/api/proxy-pools" {
@@ -123,7 +125,7 @@ pub async fn handle(
         return crate::inference_media::handle_v1_models_info(&state, &method, uri.query()).await;
     }
     if path.starts_with("/api/v1beta/models") {
-        return crate::inference_media::handle_v1beta_models(&state, &method).await;
+        return crate::inference_media::handle_v1beta_models(&state, &method, false).await;
     }
     if path == "/api/providers/client" {
         return crate::providers_oauth::handle_providers_client(&state, &method).await;
@@ -191,6 +193,10 @@ fn is_public(method: &Method, path: &str) -> bool {
     )
 }
 
+fn is_free_tier_admin_route(path: &str) -> bool {
+    path == "/api/free-tier" || path.starts_with("/api/free-tier/")
+}
+
 async fn dispatch(
     state: &AppState,
     peer: SocketAddr,
@@ -199,6 +205,9 @@ async fn dispatch(
     path: &str,
     body: Value,
 ) -> Result<Response<Body>, AppError> {
+    if path == "/api/free-tier" || path.starts_with("/api/free-tier/") {
+        return crate::free_tier::handle_admin_api(state, method, path, body).await;
+    }
     match (method.as_str(), path) {
         ("GET", "/api/health") => json_response(
             StatusCode::OK,
@@ -243,9 +252,10 @@ async fn dispatch(
         ("POST", "/api/proxy-pools") => proxy_pool_post(state, body),
         ("GET", "/api/keys") => json_response(StatusCode::OK, json!({"keys":state.db.api_keys()?})),
         ("POST", "/api/keys") => keys_post(state, body),
-        ("GET", "/api/combos") => {
-            json_response(StatusCode::OK, json!({"combos":state.db.combos()?}))
-        }
+        ("GET", "/api/combos") => json_response(
+            StatusCode::OK,
+            json!({"combos":state.db.combos()?.into_iter().filter(|combo| combo.get("name").and_then(Value::as_str) != Some(crate::free_tier::FREE_COMBO_MODEL)).collect::<Vec<_>>()}),
+        ),
         ("POST", "/api/combos") => combos_post(state, body),
         ("GET", "/api/models") => models_get(state),
         ("PUT", "/api/models") => model_legacy_alias(state, body),
@@ -312,6 +322,11 @@ fn combos_post(state: &AppState, body: Value) -> Result<Response<Body>, AppError
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::BadRequest("Name is required".into()))?;
+    if name == crate::free_tier::FREE_COMBO_MODEL {
+        return Err(AppError::BadRequest(
+            "combo-free is reserved and cannot be stored as a user combo".into(),
+        ));
+    }
     validate_combo_name(name)?;
     ensure_combo_name_available(state, name, None)?;
     let c = state.db.upsert_combo(body)?;
@@ -1322,6 +1337,11 @@ async fn dynamic(
         }
     }
     if let Some(id) = path.strip_prefix("/api/combos/") {
+        if state.db.combo_by_id(id)?.is_some_and(|combo| {
+            combo.get("name").and_then(Value::as_str) == Some(crate::free_tier::FREE_COMBO_MODEL)
+        }) {
+            return Err(AppError::NotFound("Combo not found".into()));
+        }
         return match method.as_str() {
             "GET" => match state.db.combo_by_id(id)? {
                 Some(c) => json_response(StatusCode::OK, c),
@@ -1329,6 +1349,11 @@ async fn dynamic(
             },
             "PUT" | "PATCH" => {
                 if let Some(name) = body.get("name").and_then(Value::as_str) {
+                    if name == crate::free_tier::FREE_COMBO_MODEL {
+                        return Err(AppError::BadRequest(
+                            "combo-free is reserved and cannot be stored as a user combo".into(),
+                        ));
+                    }
                     validate_combo_name(name)?;
                     ensure_combo_name_available(state, name, Some(id))?;
                 }
@@ -1483,6 +1508,13 @@ fn locale_update(body: Value) -> Result<Response<Body>, AppError> {
 #[cfg(test)]
 mod locale_release_tests {
     use super::*;
+
+    #[test]
+    fn free_tier_admin_namespace_is_exact_and_includes_nested_routes() {
+        assert!(is_free_tier_admin_route("/api/free-tier"));
+        assert!(is_free_tier_admin_route("/api/free-tier/members/example"));
+        assert!(!is_free_tier_admin_route("/api/free-tier-other"));
+    }
 
     #[tokio::test]
     async fn every_supported_locale_sets_cookie_without_login() {
