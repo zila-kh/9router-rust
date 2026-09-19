@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Card from "@/shared/components/Card";
-import Button from "@/shared/components/Button";
-import Input from "@/shared/components/Input";
+import { Card, Button, Input } from "@/shared/components";
 
 export default function LoginPage() {
   const [password, setPassword] = useState("");
@@ -11,7 +9,7 @@ export default function LoginPage() {
   const [resetHint, setResetHint] = useState("");
   const [retryAfter, setRetryAfter] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [hasPassword, setHasPassword] = useState(false);
+  const [hasPassword, setHasPassword] = useState(null);
   const [authMode, setAuthMode] = useState("password");
   const [ssoType, setSsoType] = useState("oidc");
   const [oidcConfigured, setOidcConfigured] = useState(false);
@@ -42,12 +40,7 @@ export default function LoginPage() {
 
         if (res.ok) {
           const data = await res.json();
-          const adminLoginRequested =
-            new URLSearchParams(window.location.search).get("admin") === "1";
-          if (
-            data.authenticated === true ||
-            (data.requireLogin === false && !adminLoginRequested)
-          ) {
+          if (data.authenticated === true || data.requireLogin === false) {
             window.location.assign("/dashboard");
             return;
           }
@@ -211,7 +204,7 @@ export default function LoginPage() {
             {ssoAvailable && passwordAvailable && <div className="h-px bg-border/60" />}
 
             {passwordAvailable ? (
-              <form action="/api/auth/login" method="POST" onSubmit={handleLogin} className="flex flex-col gap-4">
+              <form onSubmit={handleLogin} className="flex flex-col gap-4">
                 {isSsoEnabled && !ssoAvailable && (
                   <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
                     {activeSsoType === "saml" ? "SAML SSO" : "OIDC"} login is enabled, but configuration is incomplete. Password login is still available for recovery.
@@ -227,7 +220,6 @@ export default function LoginPage() {
                 <div className="flex flex-col gap-2">
                   <label className="text-sm font-medium">Password</label>
                   <Input
-                    name="password"
                     type="password"
                     placeholder="Enter password"
                     value={password}

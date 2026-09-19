@@ -2,10 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import UsageStats from "@/shared/components/UsageStats";
-import RequestLogger from "@/shared/components/RequestLogger";
-import { CardSkeleton } from "@/shared/components/Loading";
-import SegmentedControl from "@/shared/components/SegmentedControl";
+import { UsageStats, RequestLogger, CardSkeleton, SegmentedControl } from "@/shared/components";
 import RequestDetailsTab from "./components/RequestDetailsTab";
 
 const PERIODS = [

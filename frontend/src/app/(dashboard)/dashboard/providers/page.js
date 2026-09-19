@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
-import Card from "@/shared/components/Card";
-import { CardSkeleton } from "@/shared/components/Loading";
-import Badge from "@/shared/components/Badge";
-import Button from "@/shared/components/Button";
-import Toggle from "@/shared/components/Toggle";
+import {
+  Card,
+  CardSkeleton,
+  Badge,
+  Button,
+  Toggle,
+} from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { getProviderIconSrc } from "@/shared/utils/providerIcon";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS } from "@/shared/constants/config";
@@ -97,7 +99,7 @@ const APIKEY_INITIAL_VISIBLE = 20;
 export default function ProvidersPage() {
   const [connections, setConnections] = useState([]);
   const [providerNodes, setProviderNodes] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [showAllApikey, setShowAllApikey] = useState(false);
   const [showAddCompatibleModal, setShowAddCompatibleModal] = useState(false);
   const [showAddAnthropicCompatibleModal, setShowAddAnthropicCompatibleModal] =
@@ -105,35 +107,10 @@ export default function ProvidersPage() {
   const [testingMode, setTestingMode] = useState(null);
   const [testResults, setTestResults] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
-  const [activeTab, setActiveTab] = useState("providers");
-  const [isAdminSession, setIsAdminSession] = useState(false);
-  const [authStatusChecked, setAuthStatusChecked] = useState(false);
   const notify = useNotificationStore();
   const searchQuery = useHeaderSearchStore((s) => s.query);
   const registerSearch = useHeaderSearchStore((s) => s.register);
   const unregisterSearch = useHeaderSearchStore((s) => s.unregister);
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/auth/status", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((status) => {
-        if (alive) setIsAdminSession(status?.authenticated === true);
-      })
-      .catch(() => {
-        if (alive) setIsAdminSession(false);
-      })
-      .finally(() => {
-        if (alive) setAuthStatusChecked(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (authStatusChecked && !isAdminSession) setActiveTab("providers");
-  }, [authStatusChecked, isAdminSession]);
 
   useEffect(() => {
     registerSearch("Search providers...");
@@ -409,39 +386,6 @@ export default function ProvidersPage() {
 
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-      <div className="flex gap-2 border-b border-border" role="tablist" aria-label="Provider management">
-        {[
-          ["providers", "Providers"],
-          ...(isAdminSession ? [["free-tier", "Global Free Tier"]] : []),
-        ].map(([tab, label]) => (
-          <button
-            key={tab}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab}
-            onClick={() => setActiveTab(tab)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${activeTab === tab ? "border-primary text-text-primary" : "border-transparent text-text-muted hover:text-text-primary"}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {authStatusChecked && !isAdminSession && (
-        <Card padding="md">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-text-muted">
-              Global Free Tier management requires an authenticated admin session.
-            </p>
-            <Link className="text-sm font-medium text-primary hover:underline" href="/login?admin=1">
-              Sign in to manage
-            </Link>
-          </div>
-        </Card>
-      )}
-      {activeTab === "free-tier" ? (
-        <FreeTierPanel notify={notify} />
-      ) : (
-        <>
       <div className="flex items-center justify-end">
         <select
           value={statusFilter}
@@ -745,275 +689,9 @@ export default function ProvidersPage() {
           </div>
         </div>
       )}
-        </>
-      )}
     </div>
   );
 }
-
-function FreeTierPanel({ notify }) {
-  const [tier, setTier] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [working, setWorking] = useState(false);
-  const [addingMember, setAddingMember] = useState(null);
-  const [apiKey, setApiKey] = useState("");
-  const [customOpen, setCustomOpen] = useState(false);
-  const [custom, setCustom] = useState({
-    slug: "",
-    name: "",
-    baseUrl: "",
-    apiKey: "",
-    models: "",
-  });
-
-  const reload = async () => {
-    const response = await fetch("/api/free-tier", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not load free tier");
-    setTier(payload);
-  };
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/free-tier", { cache: "no-store" })
-      .then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "Could not load free tier");
-        if (alive) setTier(payload);
-      })
-      .catch((error) => {
-        if (alive) notify.error(error.message || "Could not load free tier");
-      })
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, [notify]);
-
-  const mutate = async (url, method, body) => {
-    setWorking(true);
-    try {
-      const response = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || payload.message || "Free-tier update failed");
-      if (payload.freeTier) setTier(payload.freeTier);
-      else await reload();
-      return payload;
-    } catch (error) {
-      notify.error(error.message || "Free-tier update failed");
-      return null;
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  const setEnabled = async (enabled) => {
-    const result = await mutate("/api/settings", "PUT", { builtinFreeCombo: enabled });
-    if (result?.settings) setTier((current) => current ? { ...current, enabled } : current);
-  };
-
-  const sync = async () => {
-    const result = await mutate("/api/free-tier/sync", "POST", {});
-    if (result) notify.success("Free-tier registry synced");
-  };
-
-  const addKeyedMember = async (member) => {
-    const result = await mutate("/api/free-tier/members", "POST", {
-      memberId: member.id,
-      apiKey,
-    });
-    if (result) {
-      setAddingMember(null);
-      setApiKey("");
-      notify.success(`${member.name} added. Test and enable the connection in Providers.`);
-    }
-  };
-
-  const addCustom = async (event) => {
-    event.preventDefault();
-    const slug = custom.slug.toLowerCase().trim().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-    const models = custom.models.split(",").map((model) => model.trim()).filter(Boolean);
-    if (!slug || !custom.name.trim() || !custom.baseUrl.trim() || models.length === 0) {
-      notify.error("Enter a name, endpoint URL, and at least one model ID");
-      return;
-    }
-    setWorking(true);
-    try {
-      const nodeResponse = await fetch("/api/provider-nodes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: custom.name.trim(),
-          prefix: slug,
-          type: "openai-compatible",
-          apiType: "chat",
-          baseUrl: custom.baseUrl.trim(),
-        }),
-      });
-      const nodePayload = await nodeResponse.json();
-      if (!nodeResponse.ok) throw new Error(nodePayload.error || "Could not create provider");
-      const memberResponse = await fetch("/api/free-tier/members", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: nodePayload.node.id,
-          name: custom.name.trim(),
-          apiKey: custom.apiKey,
-          providerSpecificData: { baseUrl: custom.baseUrl.trim(), enabledModels: models },
-        }),
-      });
-      const memberPayload = await memberResponse.json();
-      if (!memberResponse.ok) throw new Error(memberPayload.error || "Could not add free-tier provider");
-      setTier(memberPayload.freeTier);
-      setCustom({ slug: "", name: "", baseUrl: "", apiKey: "", models: "" });
-      setCustomOpen(false);
-      notify.success("Custom free provider added. Test and enable it in Providers.");
-    } catch (error) {
-      notify.error(error.message || "Could not add custom provider");
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  if (loading) return <CardSkeleton />;
-  if (!tier) return <p className="text-sm text-text-muted">Free-tier data is unavailable.</p>;
-
-  return (
-    <div className="flex flex-col gap-5">
-      <Card padding="md">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h2 className="font-semibold text-base">Built-in free tier</h2>
-            <p className="mt-1 text-sm text-text-muted">
-              API-key consumers use the single <code>combo-free</code> model. Shared provider limits apply.
-            </p>
-            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-              Requests are sent to third-party free providers, which may log or use prompts to improve their services. Do not send confidential or personal data.
-            </p>
-            <p className="mt-2 text-xs text-text-muted">
-              Registry: {tier.sync?.source || "bundled"}
-              {tier.sync?.syncedAt ? ` · synced ${new Date(tier.sync.syncedAt).toLocaleString()}` : " · no online sync yet"}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-sm">
-              <span>{tier.enabled ? "Enabled" : "Disabled"}</span>
-              <Toggle checked={!!tier.enabled} onChange={setEnabled} disabled={working} />
-            </label>
-            <Button size="sm" variant="secondary" icon="sync" onClick={sync} disabled={working}>
-              Sync registry
-            </Button>
-            <Button size="sm" icon="add" onClick={() => setCustomOpen((open) => !open)} disabled={working}>
-              Add custom API
-            </Button>
-          </div>
-        </div>
-        {customOpen && (
-          <form onSubmit={addCustom} className="mt-5 grid grid-cols-1 gap-3 border-t border-border pt-4 md:grid-cols-2">
-            <input value={custom.name} onChange={(e) => setCustom({ ...custom, name: e.target.value })} placeholder="Provider name" className="rounded-lg border border-border bg-transparent px-3 py-2 text-sm" />
-            <input value={custom.slug} onChange={(e) => setCustom({ ...custom, slug: e.target.value })} placeholder="Short ID (e.g. my-free-api)" className="rounded-lg border border-border bg-transparent px-3 py-2 text-sm" />
-            <input value={custom.baseUrl} onChange={(e) => setCustom({ ...custom, baseUrl: e.target.value })} placeholder="HTTPS base URL" className="rounded-lg border border-border bg-transparent px-3 py-2 text-sm md:col-span-2" />
-            <input type="password" value={custom.apiKey} onChange={(e) => setCustom({ ...custom, apiKey: e.target.value })} placeholder="API key (optional)" className="rounded-lg border border-border bg-transparent px-3 py-2 text-sm" />
-            <input value={custom.models} onChange={(e) => setCustom({ ...custom, models: e.target.value })} placeholder="Model IDs, comma-separated" className="rounded-lg border border-border bg-transparent px-3 py-2 text-sm" />
-            <div className="flex justify-end gap-2 md:col-span-2">
-              <Button type="button" size="sm" variant="secondary" onClick={() => setCustomOpen(false)}>Cancel</Button>
-              <Button type="submit" size="sm" disabled={working}>Add inactive member</Button>
-            </div>
-          </form>
-        )}
-      </Card>
-
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-        {(tier.members || []).map((member) => (
-          <Card key={member.id} padding="md">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-semibold">{member.name || member.id}</h3>
-                  <Badge variant={member.status === "active" ? "success" : "default"} size="sm">{member.status || "unknown"}</Badge>
-                  <Badge variant="default" size="sm">{member.kind === "virtual" ? "Anonymous" : "API key"}</Badge>
-                </div>
-                <p className="mt-1 break-all text-xs text-text-muted">{member.id}{member.signupUrl ? ` · ${member.signupUrl}` : ""}</p>
-                {member.limits && <p className="mt-2 text-xs text-text-muted">Registry limits: {Object.entries(member.limits).map(([key, value]) => `${key} ${value}`).join(" · ")}</p>}
-              </div>
-              <div className="flex flex-wrap gap-4">
-                <label className="flex items-center gap-2 text-xs text-text-muted">
-                  <Toggle checked={!member.excluded} onChange={(include) => mutate(`/api/free-tier/members/${member.id}`, "PATCH", { excluded: !include })} disabled={working || member.status !== "active"} />
-                  In pool
-                </label>
-                <label className="flex items-center gap-2 text-xs text-text-muted">
-                  <Toggle checked={!!member.exposed} onChange={(exposeDirectly) => mutate(`/api/free-tier/members/${member.id}`, "PATCH", { exposeDirectly })} disabled={working || member.status !== "active"} />
-                  Expose directly
-                </label>
-              </div>
-            </div>
-            {member.kind === "keyed" && (
-              <div className="mt-4 space-y-3 border-t border-border pt-3">
-                {(member.connections || []).map((connection) => (
-                  <div key={connection.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                    <span className="text-text-muted">
-                      {connection.name || member.name}: {connection.hasKey ? "key saved" : "key missing"} · {connection.testStatus || "not tested"} · {connection.isActive ? "active" : "inactive"}
-                    </span>
-                    <div className="flex items-center gap-3">
-                      <Link className="text-primary hover:underline" href={`/dashboard/providers/${member.provider}`}>Manage / test</Link>
-                      {connection.managed && <button type="button" className="text-xs text-red-500 hover:underline" onClick={() => mutate(`/api/free-tier/members/${connection.id}`, "DELETE")} disabled={working}>Remove</button>}
-                    </div>
-                  </div>
-                ))}
-                {addingMember === member.id ? (
-                  <div className="flex flex-wrap gap-2">
-                    <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Provider API key" className="min-w-0 flex-1 rounded-lg border border-border bg-transparent px-3 py-2 text-sm" />
-                    <Button size="sm" onClick={() => addKeyedMember(member)} disabled={working || !apiKey.trim()}>Add inactive key</Button>
-                    <Button size="sm" variant="secondary" onClick={() => setAddingMember(null)}>Cancel</Button>
-                  </div>
-                ) : (
-                  <Button size="sm" variant="secondary" icon="add" onClick={() => setAddingMember(member.id)} disabled={working}>Add key</Button>
-                )}
-              </div>
-            )}
-          </Card>
-        ))}
-      </div>
-
-      {(tier.additions || []).length > 0 && (
-        <section className="space-y-3">
-          <h2 className="font-semibold">Local additions</h2>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {tier.additions.map((addition) => (
-              <Card key={addition.id} padding="md">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="font-medium">{addition.name || addition.provider}</h3>
-                    <p className="text-xs text-text-muted">{addition.provider} · {addition.testStatus || "not tested"} · {addition.isActive ? "active" : "inactive"}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Link className="text-primary hover:underline" href={`/dashboard/providers/${addition.provider}`}>Manage / test</Link>
-                    <label className="flex items-center gap-2 text-xs text-text-muted">
-                      <Toggle checked={!addition.excluded} onChange={(include) => mutate(`/api/free-tier/members/${addition.id}`, "PATCH", { excluded: !include })} disabled={working} />In pool
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-text-muted">
-                      <Toggle checked={!!addition.exposed} onChange={(exposeDirectly) => mutate(`/api/free-tier/members/${addition.id}`, "PATCH", { exposeDirectly })} disabled={working} />Expose directly
-                    </label>
-                    <button type="button" className="text-xs text-red-500 hover:underline" onClick={() => mutate(`/api/free-tier/members/${addition.id}`, "DELETE")} disabled={working}>Remove</button>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </section>
-      )}
-      <p className="text-xs text-text-muted">
-        Keyed and custom connections are created inactive. Use their provider page to test them, then enable them; only active, tested connections enter the pool.
-      </p>
-    </div>
-  );
-}
-
-FreeTierPanel.propTypes = {
-  notify: PropTypes.object.isRequired,
-};
 
 function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
   const { connected, error, errorCode, errorTime, allDisabled } = stats;
