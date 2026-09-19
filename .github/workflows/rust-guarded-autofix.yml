@@ -33,7 +33,7 @@ jobs:
         run: |
           cargo check --manifest-path rust-backend/Cargo.toml --all-targets 2>&1 | tee cargo-check.log
           cargo test --manifest-path rust-backend/Cargo.toml --all-targets 2>&1 | tee cargo-test.log
-      - uses: stefanzweifel/git-auto-commit-action@v5
+      - uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore(rust): apply compiler-verified fixes [skip ci]"
           file_pattern: rust-backend
