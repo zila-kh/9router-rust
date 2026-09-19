@@ -472,12 +472,8 @@ export default function ProviderLimits() {
     // Throttle Claude: poll its quota every Nth auto-tick (manual force bypasses)
     const tick = (tickCountRef.current += 1);
     const claudeEvery = Math.round(CLAUDE_REFRESH_INTERVAL_MS / REFRESH_INTERVAL_MS);
-    // Inactive connections (e.g. seeded placeholders awaiting a key) are not
-    // polled: their provider only returns auth failures that would surface as
-    // quota errors. The per-card Refresh button remains the explicit path.
     const shouldFetch = (conn) =>
-      conn.isActive !== false &&
-      (force || conn.provider !== "claude" || tick % claudeEvery === 0);
+      force || conn.provider !== "claude" || tick % claudeEvery === 0;
 
     try {
       const visibleConnections = await fetchConnections(page);
@@ -520,9 +516,7 @@ export default function ProviderLimits() {
       );
 
       await Promise.all(
-        visibleConnections
-          .filter((conn) => conn.isActive !== false)
-          .map((conn) => fetchQuota(conn.id, conn.provider)),
+        visibleConnections.map((conn) => fetchQuota(conn.id, conn.provider)),
       );
       setLastUpdated(new Date());
     };
