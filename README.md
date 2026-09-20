@@ -88,6 +88,12 @@ Public model APIs keep Rust authentication at the outer boundary. Core chat, mod
 
 The proxy does not follow HTTP redirects. OIDC, SAML, login, and other redirect responses are returned to the browser with the original public host and protocol preserved.
 
+## Built-in free tier (`combo-free`)
+
+`combo-free` ships enabled: a combo computed at request time from the online free-provider registry, so a fresh install answers requests before any provider account exists. It is the entitlement of a registered consumer, and the API key is the registration boundary — this port has no separate user account or signup system, and an unauthenticated request is rejected with `401` before routing, including from loopback.
+
+While the tier is on, API-key consumers see exactly one model, `combo-free`, and cannot list or call the member models directly. A key you create for yourself is a consumer too, and a connection that is not a tier member is not addressable by any key — the expose toggle is a member-level control, and a private or loopback upstream cannot be contributed to the pool. So reaching your own connections with a key means setting `builtinFreeCombo: false` through the protected settings API, which drops `combo-free` from `/v1/models` and from routing. Dashboard sessions and the CLI token are not consumers and keep full visibility. See [docs/FREE_COMBO_PLAN.md](docs/FREE_COMBO_PLAN.md) for membership, the admin API, and the verified behavior.
+
 ## Run strict native-only mode
 
 Use strict mode to find remaining Rust parity gaps:

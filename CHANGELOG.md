@@ -1,5 +1,29 @@
 # Changelog
 
+## Free-tier boundary documented and verified — 2026-09-21
+
+No behavior changed. The free tier's audience and reach are now stated where
+operators and reviewers look for them, and its headline live leg was run.
+
+- `docs/FREE_COMBO_PLAN.md` states the registration boundary explicitly: the API
+  key is the whole of it (this port has no user account or signup system), the
+  tier is never public, and an API key — including one an operator creates for
+  themselves — is a consumer that sees only `combo-free`. It records why the
+  shipped defaults already deny anonymous access, why the expose toggle cannot
+  rescue a non-member connection, and why a private or loopback upstream cannot
+  be contributed to the pool, leaving the `builtinFreeCombo` switch as the route
+  to direct addressing.
+- The plan's live acceptance is no longer wholly pending. On a fresh data
+  directory with shipped defaults, unauthenticated requests to `/v1/models`,
+  `/v1/models/info`, and `/v1/chat/completions` each answered `401`; a newly
+  created key's `/v1/models` listed exactly `combo-free`; and
+  `POST /v1/chat/completions` with `model: "combo-free"` returned a real
+  completion served by an anonymous registry member. Switch-off filtering and
+  the rejection of an unexposed model name were confirmed as well. The
+  keyed-member leg still needs a real provider key.
+- `README.md` gains a built-in free tier section. The default changes what an
+  API key can reach, and the README did not mention the tier at all.
+
 ## Release gates restored — 2026-09-20
 
 The release gates that were failing on `main` now pass, and the drift one of

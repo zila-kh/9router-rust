@@ -1,6 +1,7 @@
 # Built-in free tier (`combo-free`) plan
 
-**Status:** Implemented; automated checks pass, live upstream acceptance remains pending
+**Status:** Implemented; the anonymous-member live leg passes, the keyed-member
+and operator legs remain pending
 **Created:** 2026-09-20
 
 ## Problem and goal
@@ -78,10 +79,38 @@ Schema:
 
 ### 3. Visibility rules
 
+`combo-free` is the entitlement of a registered consumer. "Registered" means
+holding an API key: this port has no user-account or self-signup system, so the
+key is the whole registration boundary, and the entitlement seam noted at the
+end of this document is per-key plan data rather than a separate user table.
+
+- The tier is **never public**. With the shipped defaults (`requireLogin` and
+  `requireApiKey` both true, see `db.rs`), an unauthenticated request to
+  `/v1/models`, `/v1/models/info`, or `/v1/chat/completions` is rejected with
+  `401` before any routing happens, including from loopback. Relaxing that is an
+  explicit operator choice: `requireApiKey: false` is what admits a keyless
+  loopback caller, and it is not the shipped default.
 - API-key consumers (`/v1/models`, `/v1/models/info`, model resolution):
   see exactly one model, **`combo-free`**. Member models are hidden; a request
   naming a member model directly (e.g. `groq/llama-…`) does not resolve for
   consumers.
+- An API key *is* a consumer, so it also sees only `combo-free` — including a key
+  the operator creates for themselves. `api_key_consumer` treats a request as a
+  consumer unless it also carries a valid CLI token or dashboard session, so
+  those two surfaces keep full visibility while a key does not.
+- A connection that is not a tier member is not addressable by any consumer key
+  while the tier is on, and the expose toggle does not change that:
+  `is_exposed_provider` returns false before consulting it when the provider is
+  neither a registry member nor a local pool addition. The remedies are the tier
+  switch — `builtinFreeCombo: false`, which drops `combo-free` from `/v1/models`
+  and from routing and restores direct addressing — or making the connection a
+  pool member, after which expose-directly can make it individually addressable.
+- Membership is not a shortcut for a private upstream: `POST /api/free-tier/members`
+  requires an `openai-compatible-*` addition to carry a credential-free public
+  HTTPS `baseUrl` and passes it through the SSRF guard, so a loopback or private
+  upstream cannot be contributed at all and the tier switch is its only route.
+  Membership also cuts the other way — a contributed connection becomes a pool
+  member that every consumer draws on.
 - Admin (dashboard session / CLI token): full member visibility through the
   management API and the Providers page.
 - Escape hatch: a member connection can be marked **also expose directly**
@@ -165,11 +194,35 @@ expose-directly remain available as themselves.
   routing; a consumer naming a member model directly gets an error.
 - `x-9router-runtime: rust` on all touched surfaces; strict mode unaffected.
 
-Automated verification in the current workspace: `cargo test` passes (227
-tests), targeted ESLint for the Providers page passes, and `cargo fmt` passes.
-Live upstream inference and sync are still pending; the inference check would
-send a prompt to third-party providers, so it should use an explicit, harmless
-test prompt after the registry change is published.
+Automated verification in the current workspace: `cargo test` passes (281
+tests), the frontend lint and production build gates pass, and `cargo fmt`
+passes.
+
+Live results recorded on 2026-09-21, release binary, strict mode, fresh data
+directory, shipped defaults (`requireLogin` and `requireApiKey` both true):
+
+- Unauthenticated `POST` to `/v1/models`, `/v1/models/info`, and
+  `/v1/chat/completions` each answered `401 Unauthorized` — the tier is not
+  reachable without a key.
+- After creating one API key, that consumer's `/v1/models` listed exactly
+  `combo-free`.
+- `POST /v1/chat/completions` with `model: "combo-free"` returned `HTTP 200`
+  with a real completion served by an anonymous registry member. This is the
+  first leg of the live acceptance above, and it passes end to end.
+- Turning the tier off removed `combo-free` from the consumer's list and let a
+  directly created provider connection be called with the key (`200`);
+  re-enabling restored the `404`. Naming a model that is neither `combo-free`
+  nor expose-directly answered
+  `{"error":"The model '…' does not exist or you do not have access to it."}`.
+
+Still pending: the keyed-member leg (a Groq key that passes its test growing the
+pool) needs a real provider key, and none was available for this run. The
+pool-contribution remedy in the visibility rules was not exercised live either,
+because contributing an `openai-compatible-*` member requires a public HTTPS
+upstream and the available stand-in was loopback. The registry change has not
+been exercised against a live sync either, so the anonymous leg above ran
+against the bundled seed. The inference checks send a prompt to third-party
+providers and should keep using an explicit, harmless test prompt.
 
 ## Risks and limits
 

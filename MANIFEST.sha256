@@ -15,13 +15,13 @@ b8bf83da86c64c5354803266cfe503c9813e5407523df5cebb3e615a305a8f22  ./.github/work
 fb839095aa534d8e8e3758ba9776592360b1ca9f5523ddc556e1ce170562ee12  ./.github/workflows/strict-full-stack-v2.yml
 edb47d3de12b8a2caddab0699e606502991cabeb7f918949d3a721779bcfe431  ./.github/workflows/vendor-frontend.yml
 19e33b1b80029ce6f611ed1c84b0eeb93fe671b11e04160d4c38f5dd01174c88  ./.gitignore
-fd3afb74c4446659b381491721c5c36b3362f9570e32fb5d460dae39200e8fb1  ./CHANGELOG.md
+4e4cdf28b3c07dfbe17aecad2c2aeb248b4bcd32bbba40d9298677a514618ac9  ./CHANGELOG.md
 135d0d29bd44d669429303424af3bff233a166bd442841e2d485ec9e6ced6811  ./ci/run-rust-autofix
 0a22719ba9e445746a26c09453209fcdeb954f6095055a37102d62e2b0006b12  ./docs/ARCHITECTURE.md
 97a94c542a6fbcc22aba600dd11db5d89ab7e424d78e0fbf26d5d551e2fc9dc3  ./docs/auto-routing.md
 bee37e171aefcaaf458042d85ee0650bc51de88592a573b53215bf97ce345dad  ./docs/BUILD_STATUS.md
 09e4a94614a5ceb71903e252ac3378f8820b486b6c5fe91eb0596027fbd06dca  ./docs/CODEX_STREAMING_PLAN.md
-463a35cac42b50f06b6c03b670b0ff5c24db029e64b74e6d395164c3090e6faf  ./docs/FREE_COMBO_PLAN.md
+3709391a10e610dca4f725d3c9fe47dc5f38d42f7a322855e4c1fd27ba76aa4e  ./docs/FREE_COMBO_PLAN.md
 cd3475006a7a6ba056cef504bc9f150a9822f1435c1c9cdc382f4a54b898fafc  ./docs/opencode/quick-chat.md
 80e710635b30c03eb3a96bfc134e8784fa4ffb3a5b0b5fd12d2b2b33507451e5  ./docs/PARITY.md
 1b00305beb255240c6a4acaeb579926f5de274c5079b739a3228055a51c40614  ./docs/PORT_REVIEW_2026-09-17.md
@@ -1159,7 +1159,7 @@ dc40c029c4b183a73f51e346fc0d5085305081024ca3bf4abac1d2cfa4d05e49  ./frontend/src
 ff883cfa1472310dc6e04f0ab1df74ca9df488bb6d6bfc0d9d1b6c67a08e02b4  ./frontend/start.sh
 d67f5eac2bc5c1348303249af4eadeef023d360a3c3c39f8345bc5a7d1b54c59  ./LICENSE
 f8bd60227e6fc987df1013d7bcc8edd4f98cc998b1662dca5ac1fef7b7a3fd73  ./package.json
-7f3fe0e007ce4d24c0a6e8675b99bef21424ba4f4021c4d1a17ad83d84226cab  ./README.md
+5c2fd46a25971ef3230b288bda6370d1844c0268d754de151d1b393d9319aa89  ./README.md
 62f786521d465630911f190114a2dc42dc1f2e50e7ea00496de78311d117f885  ./rust-backend/assets/free-registry.json
 d06a548d5462821523fcc028eb385ab65a32b0da93022c8d79e70967b60d47b3  ./rust-backend/assets/provider-catalog.json
 1b03e74132c1c857e427a563361004f98c425adc70d2149ae38285a89bf35aa0  ./rust-backend/assets/request-path-cases.json
