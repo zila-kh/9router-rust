@@ -164,6 +164,17 @@ curl -fsS -b "$COOKIE" -H 'content-type: application/json' \
   --data-binary @"$TMP/connection-body.json" http://127.0.0.1:20130/api/providers >"$TMP/provider.json"
 grep -q '"connection"' "$TMP/provider.json"
 
+# The built-in free tier ships enabled and shows API-key consumers only the
+# single `combo-free` model, so the connection created above is neither
+# listable nor callable with the key until the admin switch is off
+# (docs/FREE_COMBO_PLAN.md). Assert the shipped default first, then switch it
+# off so the direct-model assertions below exercise the provider connection.
+curl -fsS -b "$COOKIE" http://127.0.0.1:20130/api/free-tier >"$TMP/free-tier.json"
+python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["enabled"] is True' "$TMP/free-tier.json"
+curl -fsS -b "$COOKIE" -H 'content-type: application/json' --request PATCH \
+  -d '{"builtinFreeCombo":false}' http://127.0.0.1:20130/api/settings >"$TMP/free-combo-off.json"
+python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["settings"]["builtinFreeCombo"] is False' "$TMP/free-combo-off.json"
+
 MODEL="$NODE_ID/mock-model"
 python3 - "$MODEL" >"$TMP/openai.json" <<'PY'
 import json, sys

@@ -40,6 +40,14 @@ them should have caught is fixed rather than silenced.
   React Compiler rules leave behind. Errors still fail the gate everywhere, and
   the zero-warning budget still applies to everything these three rules do not
   cover.
+- The strict end-to-end smoke test now follows the built-in free tier. The tier
+  ships enabled and deliberately shows API-key consumers only the single
+  `combo-free` model (see `docs/FREE_COMBO_PLAN.md`), so the provider
+  connection the test creates was unreachable with the key it creates —
+  `/v1/chat/completions` answered 404 — and the test had been failing since the
+  tier landed. It now asserts the shipped default, switches the tier off
+  through the documented admin setting, and then exercises the direct provider
+  path as before. No product behavior changed.
 
 ## Prompt-cache economics and stream liveness — 2026-09-20
 
