@@ -95,9 +95,14 @@ cargo build --release --locked --manifest-path rust-backend/Cargo.toml
 node scripts/update-manifest.mjs && node scripts/update-manifest.mjs --check
 ```
 
-Three clippy warnings in `free_tier.rs` are pre-existing and unrelated; leave
-them. `MANIFEST.sha256` covers every file `git ls-files` reports, including brand
-new ones, so refresh it after *each* edit or `--check` fails.
+Clippy is currently clean (the `free_tier.rs` warnings were fixed), so `-D
+warnings` in `full-stack-ci.yml` is a real gate — a new warning fails CI. Note
+that other work may be happening in this tree at the same time: `git status`
+before and after a port pass, and never revert a change you did not make.
+
+`MANIFEST.sha256` covers every file `git ls-files` reports, including brand new
+ones, so refresh it after *each* edit or `--check` fails. It also re-hashes any
+concurrent edits, which is expected rather than a sign you broke something.
 
 ### 7. Restart the stack if the user is running it
 

@@ -239,7 +239,7 @@ pub async fn sync(state: &AppState) -> Result<Value, AppError> {
         body: None,
         timeout_ms: Some(20_000),
     };
-    let response = crate::ssrf_guard::fetch_public(&url, &request)
+    let response = crate::ssrf_guard::fetch_public(url, &request)
         .await
         .map_err(|e| AppError::Upstream(format!("free-registry fetch failed: {}", e.message())))?;
     if !response.status().is_success() {
@@ -1194,11 +1194,11 @@ fn patch_member(state: &AppState, member: &str, body: &Value) -> Result<(), AppE
             data.insert("freeTierExpose".into(), json!(value));
         }
     }
-    if !body.get("excluded").and_then(Value::as_bool).is_some()
-        && !body
+    if body.get("excluded").and_then(Value::as_bool).is_none()
+        && body
             .get("exposeDirectly")
             .and_then(Value::as_bool)
-            .is_some()
+            .is_none()
     {
         return Err(AppError::BadRequest(
             "excluded or exposeDirectly boolean is required".into(),

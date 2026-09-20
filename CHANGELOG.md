@@ -1,5 +1,46 @@
 # Changelog
 
+## Release gates restored — 2026-09-20
+
+The release gates that were failing on `main` now pass, and the drift one of
+them should have caught is fixed rather than silenced.
+
+- The release manifest is platform-independent. `update-manifest.mjs` hashed
+  raw working-tree bytes, and the 1251-file manifest that replaced the old
+  hand-maintained list was generated from a Windows working tree, so 1045 of
+  its entries could never match the LF content of a Linux CI checkout. The gate
+  had not been reached on CI yet because the boundary regression below failed
+  first. Hashing now normalizes line endings for text files and leaves content
+  that is not valid UTF-8 byte-exact, so the same commit verifies on either
+  platform.
+- `cargo clippy --locked --all-targets -- -D warnings` passes again. Three
+  errors in `free_tier.rs` were repaired: a needless re-borrow of the registry
+  URL and two negated `is_some()` chains on the member-update body.
+- The overlay source of `dashboardGuard.js` was out of sync with the copy
+  vendored into the frontend: `ALWAYS_PROTECTED` listed `/api/free-tier` in the
+  frontend but not in `scripts/frontend-overrides/`, which is what
+  re-materialization copies back. Left alone, the next vendor pass would have
+  silently demoted the free-tier admin namespace from always-protected to
+  subject to the optional-login setting, because the guard prefix-matches that
+  list. Both copies now agree, and the boundary suite asserts that
+  `/api/free-tier`, its nested routes, and its percent-escaped form stay behind
+  a session while login is optional.
+- The release-boundary suite no longer compares the overlay and its vendored
+  copy byte for byte. `.gitattributes` pins line endings for `*.sh` only, so a
+  Windows checkout legitimately normalized the two files differently and failed
+  a content assertion it had already satisfied. The comparison normalizes line
+  endings and the assertion itself is unchanged.
+- The frontend lint gate keeps `--max-warnings=0` and passes. The 201 warnings
+  it reported were entirely the pinned snapshot's own debt — the generated
+  provider registry's anonymous default exports, dashboard effect dependencies,
+  and `<img>` usage. Rewriting them here would be discarded on the next vendor
+  pass, so `@next/next/no-img-element`,
+  `import/no-anonymous-default-export`, and `react-hooks/exhaustive-deps` are
+  exempted, together with unused-disable reporting that the already-disabled
+  React Compiler rules leave behind. Errors still fail the gate everywhere, and
+  the zero-warning budget still applies to everything these three rules do not
+  cover.
+
 ## Prompt-cache economics and stream liveness — 2026-09-20
 
 Cost, following the Anthropic and OpenAI caching rules (cache reads bill at 0.1x

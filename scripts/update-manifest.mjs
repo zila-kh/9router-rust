@@ -35,14 +35,25 @@ const files = tracked.stdout
   .filter((file) => !excluded.has(file))
   .sort((left, right) => left.localeCompare(right, "en"));
 
+// Line endings are a checkout artifact rather than content: .gitattributes pins
+// only *.sh, so the same commit hashes differently in a Windows working tree
+// than in the Linux CI checkout, and a manifest generated on Windows can never
+// verify on Linux. Normalize text before hashing and keep anything that is not
+// valid UTF-8 byte-exact.
+const stableDigest = (file) => {
+  const bytes = fs.readFileSync(path.join(root, file));
+  let stable = bytes;
+  if (!bytes.includes(0)) {
+    const text = bytes.toString("utf8");
+    if (Buffer.from(text, "utf8").equals(bytes)) {
+      stable = Buffer.from(text.replace(/\r\n/g, "\n"), "utf8");
+    }
+  }
+  return crypto.createHash("sha256").update(stable).digest("hex");
+};
+
 const generated = files
-  .map((file) => {
-    const digest = crypto
-      .createHash("sha256")
-      .update(fs.readFileSync(path.join(root, file)))
-      .digest("hex");
-    return `${digest}  ./${file}`;
-  })
+  .map((file) => `${stableDigest(file)}  ./${file}`)
   .join("\n") + "\n";
 
 if (process.argv.includes("--check")) {

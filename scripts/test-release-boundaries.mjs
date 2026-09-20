@@ -10,9 +10,13 @@ import { spawnSync } from 'node:child_process';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cases = JSON.parse(fs.readFileSync(path.join(root, 'rust-backend/assets/request-path-cases.json'), 'utf8'));
 const guardPath = path.join(root, 'frontend/src/dashboardGuard.js');
-assert.equal(fs.readFileSync(guardPath, 'utf8'), fs.readFileSync(path.join(root, 'scripts/frontend-overrides/src/dashboardGuard.js'), 'utf8'));
-const source = fs.readFileSync(guardPath, 'utf8')
-  .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
+// Line endings are a checkout artifact: .gitattributes pins only *.sh, so a
+// Windows checkout normalizes the vendored copy differently from the overlay
+// source. Compare the reviewed content, which is what this assertion protects.
+const readSource = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+assert.equal(readSource(guardPath), readSource(path.join(root, 'scripts/frontend-overrides/src/dashboardGuard.js')));
+const source = readSource(guardPath)
+  .replace(/^import .*;\n/gm, '').replace(/^export /gm, '');
 let settings = { requireLogin: false, requireApiKey: true };
 const context = vm.createContext({
   URL, Headers, process: { env: { NODE_ENV: 'production' } },
@@ -43,6 +47,11 @@ for (const entry of cases.filter((entry) => entry.error)) {
 }
 assert.equal((await context.runGuard(request('/api/oauth/github/device-code'))).status, 200);
 assert.equal((await context.runGuard(request('/api/%73ettings/database'))).status, 401);
+// /api/free-tier is always-protected and prefix-matched, so the admin namespace
+// must stay behind a session even while login is optional, in escaped form too.
+assert.equal((await context.runGuard(request('/api/free-tier'))).status, 401);
+assert.equal((await context.runGuard(request('/api/free-tier/members/kilo'))).status, 401);
+assert.equal((await context.runGuard(request('/api/%66ree-tier'))).status, 401);
 settings = { requireLogin: true, requireApiKey: true };
 assert.equal((await context.runGuard(request('/api/locale/'))).status, 200);
 assert.equal((await context.runGuard(request('/api/providers'))).status, 401);
