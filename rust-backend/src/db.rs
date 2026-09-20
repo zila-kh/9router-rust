@@ -581,12 +581,53 @@ INSERT INTO _meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO NO
         status: &str,
         meta: &Value,
     ) -> Result<(), AppError> {
+        let tokens = json!({
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+        });
+        self.usage_record_tokens(
+            provider,
+            model,
+            connection_id,
+            endpoint,
+            &tokens,
+            0.0,
+            status,
+            meta,
+        )
+    }
+
+    /// Record a request with its full token record and cost.
+    ///
+    /// `tokens` follows the dashboard's canonical shape (see
+    /// `translate::stored_tokens`): the prompt side is cache-INCLUSIVE and
+    /// `cached_tokens` / `cache_creation_input_tokens` are the cache subsets.
+    /// The cached counts are what the dashboard's cache-hit column reads, so a
+    /// dropped key reads as a 100% miss.
+    pub fn usage_record_tokens(
+        &self,
+        provider: Option<&str>,
+        model: Option<&str>,
+        connection_id: Option<&str>,
+        endpoint: &str,
+        tokens: &Value,
+        cost: f64,
+        status: &str,
+        meta: &Value,
+    ) -> Result<(), AppError> {
         let ts = Utc::now().to_rfc3339();
         let meta = serde_json::to_string(meta)?;
-        let tokens = serde_json::to_string(
-            &json!({"prompt_tokens":prompt,"completion_tokens":completion,"total_tokens":prompt+completion}),
-        )?;
-        self.with_conn(|db|{db.execute("INSERT INTO usageHistory(timestamp,provider,model,connectionId,endpoint,promptTokens,completionTokens,cost,status,tokens,meta) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8,?9,?10)",params![ts,provider,model,connection_id,endpoint,prompt,completion,status,tokens,meta])?;Ok(())})
+        let prompt = tokens
+            .get("prompt_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let completion = tokens
+            .get("completion_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let tokens = serde_json::to_string(tokens)?;
+        self.with_conn(|db|{db.execute("INSERT INTO usageHistory(timestamp,provider,model,connectionId,endpoint,promptTokens,completionTokens,cost,status,tokens,meta) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![ts,provider,model,connection_id,endpoint,prompt,completion,cost,status,tokens,meta])?;Ok(())})
     }
 
     pub fn usage_route_stats(&self, period: &str) -> Result<Value, AppError> {
@@ -1250,6 +1291,7 @@ pub fn merge_settings_defaults(mut raw: Value) -> Value {
       "enableObservability":false,"observabilityMaxRecords":1000,"observabilityBatchSize":20,"observabilityFlushIntervalMs":5000,"observabilityMaxJsonSize":5,
       "outboundProxyEnabled":false,"outboundProxyUrl":"","outboundNoProxy":"","mitmRouterBaseUrl":"http://localhost:20130","dnsToolEnabled":{},"rtkEnabled":true,
       "headroomEnabled":false,"headroomUrl":"http://localhost:8787","headroomCompressUserMessages":false,"headroomTimeoutMs":3000,
+      "promptCacheTtl":"5m",
       "cavemanEnabled":false,"cavemanLevel":"full","ponytailEnabled":false,"ponytailLevel":"full","pxpipeEnabled":false,"pxpipeAutoInstall":true,"pxpipeMinChars":25000,"pxpipeTimeoutMs":15000
     });
     let mut d = defaults.as_object().cloned().unwrap_or_default();
@@ -1273,6 +1315,36 @@ mod tests {
             Some("密钥密钥密钥密钥***".into())
         );
         assert_eq!(mask_key(Some("é")), Some("é***".into()));
+    }
+
+    #[test]
+    fn usage_ledger_keeps_cache_tokens_and_their_cost() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let db = Db::open(&temp.path().join("data.sqlite")).expect("open test database");
+        let tokens = json!({
+            "prompt_tokens": 25000,
+            "completion_tokens": 100,
+            "total_tokens": 25100,
+            "cached_tokens": 20000,
+            "cache_creation_input_tokens": 4000,
+        });
+        db.usage_record_tokens(
+            Some("claude"),
+            Some("claude-sonnet-4.5"),
+            Some("conn-1"),
+            "https://api.anthropic.com/v1/messages",
+            &tokens,
+            0.0123,
+            "ok",
+            &json!({}),
+        )
+        .expect("record usage");
+
+        let stats = db.usage_stats("all").expect("usage stats");
+        assert_eq!(stats["totalCachedTokens"], json!(20000));
+        assert_eq!(stats["totalPromptTokens"], json!(25000));
+        let cost = stats["totalCost"].as_f64().unwrap_or_default();
+        assert!((cost - 0.0123).abs() < 1e-9, "{cost}");
     }
 
     #[test]

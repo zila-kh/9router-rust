@@ -78,7 +78,7 @@ The manifest intentionally declares these classes of non-parity:
 - full Cursor AgentService/tool protocol;
 - full Windsurf gRPC-Web executor;
 - Kiro integrity repair/retry edge cases;
-- true event-by-event cross-format streaming where formats differ;
+- true event-by-event cross-format streaming where formats differ, except the Chat Completions caller -> Responses provider direction, which now converts upstream events incrementally in `rust-backend/src/responses_stream.rs` instead of buffering the whole answer (Claude and Gemini callers of a Responses provider still buffer, and same-format streaming remains a raw byte pass-through);
 - MITM certificate/DNS manager;
 - CLI-tool host configuration APIs;
 - Headroom and PXPIPE lifecycle/management APIs;

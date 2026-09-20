@@ -1704,7 +1704,8 @@ fn glob_regex(pattern: &str) -> Regex {
     Regex::new(&source).expect("capability glob pattern compiles")
 }
 
-fn match_pattern(pattern: &str, model: &str) -> bool {
+/// Glob match shared with the pricing tables, which key on the same patterns.
+pub(crate) fn match_pattern(pattern: &str, model: &str) -> bool {
     glob_regex(pattern).is_match(model)
 }
 

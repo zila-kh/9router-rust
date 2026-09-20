@@ -52,6 +52,16 @@ pub struct ResolvedModel {
 pub fn catalog() -> &'static Value {
     &CATALOG
 }
+
+/// Rate tables exported from `open-sse/providers/pricing.js`. An older vendored
+/// catalog simply has no `pricing` key; cost accounting then reports zero
+/// instead of guessing. Borrows rather than clones: this is read on every
+/// priced request.
+pub fn catalog_pricing() -> &'static Value {
+    static NO_PRICING: once_cell::sync::Lazy<Value> =
+        once_cell::sync::Lazy::new(|| json!({"provider":{},"model":{},"pattern":[]}));
+    CATALOG.get("pricing").unwrap_or(&NO_PRICING)
+}
 pub fn provider_entry(id: &str) -> Option<&'static Value> {
     CATALOG.get("registry")?.as_array()?.iter().find(|e| {
         e.get("id").and_then(Value::as_str) == Some(id)
@@ -424,6 +434,8 @@ mod tests {
             data_dir,
             db_path,
             upstream_timeout_secs: 5,
+            stream_first_chunk_timeout: std::time::Duration::from_secs(200),
+            stream_stall_timeout: std::time::Duration::from_secs(360),
             ui_only_header_secret: "test-secret".into(),
             legacy_backend_origin: None,
             compat_api_enabled: false,

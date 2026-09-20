@@ -1,7 +1,50 @@
 # Codex streaming latency plan
 
-**Status:** Planned; implementation not started  
-**Created:** 2026-09-19
+**Status:** Implemented for the targeted path; live benchmark pending  
+**Created:** 2026-09-19  
+**Implemented:** 2026-09-20
+
+## Implementation status
+
+Steps 1-6 are implemented in `rust-backend/src/responses_stream.rs`, with the
+streaming branch wired in `rust-backend/src/gateway.rs`:
+
+- an incremental SSE decoder that buffers partial lines and never assumes a
+  network chunk aligns with a frame (CRLF, multi-line `data:`, comments and
+  keep-alives, a truncated final event, and an over-long frame that is dropped
+  rather than buffered);
+- a stateful Responses-to-Chat encoder emitting a stable id and model, one
+  assistant role chunk, text and `reasoning_content` deltas, parallel tool calls
+  with provider output indices, a terminal finish reason, provider usage, and
+  exactly one `[DONE]`;
+- the gateway takes the incremental path for `wants_stream` +
+  `caller == Format::OpenAi` + `provider_format == Format::Responses` when the
+  upstream answer is SSE. Same-format streaming still passes through raw, and
+  non-streaming requests still use the buffered translation. A provider that
+  ignores `stream: true` and answers with one JSON document stays on the
+  buffered path;
+- usage is recorded once from the terminal event, and a transport failure after
+  the response was committed becomes a framed SSE error followed by `[DONE]`
+  instead of a broken stream;
+- inactivity is bounded on both streaming paths — 200 s to the first chunk and
+  360 s between chunks by default (`STREAM_FIRST_CHUNK_TIMEOUT_MS` /
+  `STREAM_STALL_TIMEOUT_MS`, or the `NINEROUTER_`-prefixed names) — and a stall
+  or a stream that ends without a terminal event is reported in-band in the
+  client's own format rather than closing silently or claiming a successful
+  `finish_reason`;
+- Claude and Gemini callers of a Responses provider are unchanged and still
+  buffer (step 6).
+
+Verified by unit tests: decoder chunk boundaries, CRLF, multi-line data,
+keep-alives, malformed frames, truncated and over-long frames; encoder output for
+text, reasoning, parallel tool calls, argument fragments reported only at item
+completion, finish reasons, usage, provider errors and exactly one `[DONE]`; and
+a deterministic progressive test that reads the first text delta off the
+downstream stream *before* the completion event is sent upstream.
+
+Not yet done: the step 7 live re-measurement. The numbers below are the
+pre-change baseline and still stand as the "before" side; this repository has no
+provider credentials, so the after-benchmark must run on a deployment.
 
 ## Problem and evidence
 

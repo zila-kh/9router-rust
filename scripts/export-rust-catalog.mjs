@@ -25,7 +25,22 @@ function clean(value, seen = new WeakSet()) {
   return undefined;
 }
 
-const payload = clean({ registry: REGISTRY, providers: PROVIDERS, models: PROVIDER_MODELS, oauth: PROVIDER_OAUTH, media: PROVIDER_MEDIA });
+// Pricing travels with the catalog so the Rust gateway can price a request the
+// same way the dashboard does. Imported defensively: a snapshot without the
+// pricing module still produces a valid catalog, just without rates.
+let pricing = {};
+try {
+  const mod = await import('../open-sse/providers/pricing.js');
+  pricing = {
+    provider: mod.PROVIDER_PRICING || {},
+    model: mod.MODEL_PRICING || {},
+    pattern: mod.PATTERN_PRICING || [],
+  };
+} catch (error) {
+  console.warn(`pricing export skipped: ${error.message}`);
+}
+
+const payload = clean({ registry: REGISTRY, providers: PROVIDERS, models: PROVIDER_MODELS, oauth: PROVIDER_OAUTH, media: PROVIDER_MEDIA, pricing });
 const out = path.resolve('rust-backend/assets/provider-catalog.json');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, JSON.stringify(payload, null, 2));

@@ -3,6 +3,7 @@ use std::{
     env,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
+    time::Duration,
 };
 
 #[derive(Clone, Debug)]
@@ -12,10 +13,35 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub db_path: PathBuf,
     pub upstream_timeout_secs: u64,
+    /// How long a stream may go without its first chunk (provider prefill).
+    pub stream_first_chunk_timeout: Duration,
+    /// How long a streaming response may go without any chunk once it started.
+    pub stream_stall_timeout: Duration,
     #[allow(dead_code)]
     pub ui_only_header_secret: String,
     pub legacy_backend_origin: Option<String>,
     pub compat_api_enabled: bool,
+}
+
+/// Read a millisecond timeout from the first environment name that is set.
+fn stream_timeout(names: &[&str], default_ms: u64) -> anyhow::Result<Duration> {
+    for name in names {
+        match env::var(name) {
+            Ok(value) => {
+                let ms: u64 = value
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid {name} value: {value}"))?;
+                if ms == 0 {
+                    anyhow::bail!("{name} must be greater than zero");
+                }
+                return Ok(Duration::from_millis(ms));
+            }
+            Err(env::VarError::NotPresent) => continue,
+            Err(error) => return Err(error).context(format!("{name} is not valid Unicode")),
+        }
+    }
+    Ok(Duration::from_millis(default_ms))
 }
 
 impl Config {
@@ -59,6 +85,23 @@ impl Config {
         if upstream_timeout_secs == 0 {
             bail!("NINEROUTER_UPSTREAM_TIMEOUT_SECS must be greater than zero");
         }
+        // Stream inactivity limits, matching upstream's STREAM_*_TIMEOUT_MS
+        // defaults (200s prefill, 360s inter-chunk). Both names are accepted so an
+        // existing upstream deployment's environment keeps working here.
+        let stream_first_chunk_timeout = stream_timeout(
+            &[
+                "NINEROUTER_STREAM_FIRST_CHUNK_TIMEOUT_MS",
+                "STREAM_FIRST_CHUNK_TIMEOUT_MS",
+            ],
+            200_000,
+        )?;
+        let stream_stall_timeout = stream_timeout(
+            &[
+                "NINEROUTER_STREAM_STALL_TIMEOUT_MS",
+                "STREAM_STALL_TIMEOUT_MS",
+            ],
+            360_000,
+        )?;
         let compat_api_enabled = env_flag("NINEROUTER_COMPAT_API", false)?;
         let ui_only_header_secret = match env::var("NINEROUTER_UI_SECRET") {
             Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
@@ -91,6 +134,8 @@ impl Config {
             data_dir,
             db_path,
             upstream_timeout_secs,
+            stream_first_chunk_timeout,
+            stream_stall_timeout,
             ui_only_header_secret,
             legacy_backend_origin,
             compat_api_enabled,

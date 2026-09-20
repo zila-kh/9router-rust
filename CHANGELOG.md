@@ -1,5 +1,38 @@
 # Changelog
 
+## Prompt-cache economics and stream liveness — 2026-09-20
+
+Cost, following the Anthropic and OpenAI caching rules (cache reads bill at 0.1x
+base input, writes at 1.25x/2x):
+
+- Claude upstream requests now carry Anthropic cache breakpoints. The Rust
+  gateway previously emitted none and dropped the ones clients sent, so every
+  turn re-billed the whole re-sent history at full input price. Two anchors (the
+  end of the tools+system head and the newest turn) stay inside the four-marker
+  budget; `promptCacheTtl` selects `5m` (default), `1h` or `off`.
+- Cache tokens are recorded and priced. Canonical usage is cache-inclusive for
+  all four wire formats, cache reads bill at their own rate, and the rate tables
+  travel with the provider catalog from `open-sse/providers/pricing.js`, so a
+  native Rust request lands in the usage ledger with the cost the dashboard would
+  compute. The streaming passthrough previously recorded nothing at all;
+  `streaming::UsageSniffer` now reads usage out of the bytes as they pass.
+- Gemini history rebuilds use stable, correlated tool-call ids instead of a fresh
+  uuid per request, which changed the prompt prefix on every call (implicit
+  caching could never hit) and broke function-response correlation.
+- A request-shaped 4xx (400/405/409/413/415/422/431/451) no longer rotates the
+  conversation to another account or cools a free-tier member: the failure says
+  nothing about the credential, and switching abandons the account whose prompt
+  cache the conversation was using.
+- Images a tool returned inside a Claude `tool_result` reach the upstream again,
+  as tagged user content, instead of being dropped by the translation; base64 is
+  never dumped into the tool message.
+- Cross-format streaming is incremental for Chat Completions callers of
+  Responses-format providers: upstream events are translated as they arrive
+  instead of after the whole answer, and a stream that aborts, stalls (200 s to
+  the first chunk, 360 s between chunks, overridable with `STREAM_*_TIMEOUT_MS`)
+  or ends without a terminal event now reports that in-band in the client's own
+  format rather than closing silently or claiming a successful finish.
+
 ## Release hardening — 2026-09-19
 
 - Removed the Tailscale card from the dashboard API Endpoint page in the vendored

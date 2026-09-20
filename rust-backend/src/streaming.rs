@@ -1,4 +1,6 @@
 use crate::{error::AppError, translate::Format};
+use bytes::Bytes;
+use chrono::Utc;
 use serde_json::{json, Value};
 
 pub fn looks_streaming(content_type: Option<&str>, bytes: &[u8]) -> bool {
@@ -32,6 +34,167 @@ fn sse_jsons(bytes: &[u8]) -> Vec<Value> {
     out
 }
 
+/// Longest partial SSE line kept while sniffing; a single frame larger than
+/// this (an inline image, say) is dropped rather than buffered.
+const SNIFFER_MAX_PENDING: usize = 256 * 1024;
+
+/// Reads the cache-aware usage out of an SSE stream as it passes through.
+///
+/// A same-format stream is forwarded verbatim, so nothing downstream ever sees
+/// the usage event that carries the cache counters. Feeding the bytes through
+/// here as they pass keeps streaming requests in the ledger — which is the only
+/// way a Claude Code session (always streaming) can show its cache hit rate.
+pub struct UsageSniffer {
+    format: Format,
+    pending: String,
+    native: Value,
+}
+impl UsageSniffer {
+    pub fn new(format: Format) -> Self {
+        Self {
+            format,
+            pending: String::new(),
+            native: json!({}),
+        }
+    }
+
+    pub fn feed(&mut self, chunk: &[u8]) {
+        self.pending.push_str(&String::from_utf8_lossy(chunk));
+        while let Some(index) = self.pending.find('\n') {
+            let line = self.pending[..index].trim().to_string();
+            self.pending.drain(..=index);
+            if let Some(data) = line.strip_prefix("data:") {
+                self.absorb(data.trim());
+            }
+        }
+        if self.pending.len() > SNIFFER_MAX_PENDING {
+            self.pending.clear();
+        }
+    }
+
+    /// Provider-native usage collected so far.
+    pub fn native_usage(&self) -> Value {
+        self.native.clone()
+    }
+
+    /// Whether any usage event was seen at all — a stream the client abandoned
+    /// before the usage frame yields false.
+    pub fn observed(&self) -> bool {
+        self.native
+            .as_object()
+            .is_some_and(|usage| !usage.is_empty())
+    }
+
+    fn absorb(&mut self, data: &str) {
+        if data.is_empty() || data == "[DONE]" {
+            return;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        match self.format {
+            Format::Claude => match event.get("type").and_then(Value::as_str) {
+                Some("message_start") => self.merge(event.pointer("/message/usage")),
+                Some("message_delta") => self.merge(event.get("usage")),
+                _ => {}
+            },
+            Format::Gemini => self.merge(event.get("usageMetadata")),
+            Format::Responses => {
+                if event.get("type").and_then(Value::as_str) == Some("response.completed") {
+                    self.merge(event.pointer("/response/usage"));
+                }
+            }
+            Format::OpenAi => self.merge(event.get("usage")),
+        }
+    }
+
+    /// Keep the newest positive counter per field: Claude splits the prompt side
+    /// (message_start) from the output side (message_delta) across events.
+    fn merge(&mut self, incoming: Option<&Value>) {
+        let Some(object) = incoming.and_then(Value::as_object) else {
+            return;
+        };
+        let native = self
+            .native
+            .as_object_mut()
+            .expect("sniffer usage is an object");
+        for (key, value) in object {
+            let positive = value.as_i64().is_some_and(|count| count > 0);
+            if positive || !native.contains_key(key) {
+                native.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+/// Terminal frames for a stream that aborted or stalled *after* HTTP 200 was
+/// already committed to the client, so the status code can no longer change.
+///
+/// Never end a stream silently: an OpenAI-compatible client raises on a `data:`
+/// payload carrying an `error` key (it checks that before `[DONE]`), an
+/// Anthropic client needs an `event: error` frame, and a Responses client needs a
+/// `response.failed` event. Shapes mirror upstream's
+/// `buildStreamErrorBytes`/`buildAbortedResponsesTerminalBytes`.
+pub fn abort_terminal_frames(format: Format, message: &str) -> Bytes {
+    let payload = match format {
+        Format::Claude => format!(
+            "event: error
+data: {}
+
+",
+            json!({
+                "type": "error",
+                "error": {
+                    "message": message,
+                    "type": "server_error",
+                    "code": "internal_server_error",
+                },
+            })
+        ),
+        Format::Gemini => format!(
+            "data: {}
+
+",
+            json!({"error": {"code": 504, "message": message, "status": "GATEWAY_TIMEOUT"}})
+        ),
+        Format::Responses => format!(
+            "event: response.failed
+data: {}
+
+data: [DONE]
+
+",
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": format!("resp_{}", Utc::now().timestamp_millis()),
+                    "status": "failed",
+                    "error": {
+                        "type": "stream_error",
+                        "code": "stream_disconnected",
+                        "message": message,
+                    },
+                },
+            })
+        ),
+        Format::OpenAi => format!(
+            "data: {}
+
+data: [DONE]
+
+",
+            json!({
+                "error": {
+                    "message": message,
+                    "type": "server_error",
+                    "code": "internal_server_error",
+                },
+            })
+        ),
+    };
+    Bytes::from(payload)
+}
+
 pub fn reduce_stream(bytes: &[u8], format: Format, model: &str) -> Result<Value, AppError> {
     match format {
         Format::OpenAi => reduce_openai(bytes, model),
@@ -48,6 +211,11 @@ fn reduce_openai(bytes: &[u8], model: &str) -> Result<Value, AppError> {
     let mut finish = "stop".to_string();
     let mut prompt = 0;
     let mut completion = 0;
+    // Cache counters ride in the usage payload; dropping them here would hide
+    // every hit from the ledger and from cost accounting.
+    let mut cached = 0;
+    let mut cache_creation = 0;
+    let mut cached_reasoning = 0;
     let mut calls: Vec<Value> = Vec::new();
     let mut id = None;
     for e in events {
@@ -62,7 +230,19 @@ fn reduce_openai(bytes: &[u8], model: &str) -> Result<Value, AppError> {
             completion = u
                 .get("completion_tokens")
                 .and_then(Value::as_i64)
-                .unwrap_or(completion)
+                .unwrap_or(completion);
+            cached = u
+                .pointer("/prompt_tokens_details/cached_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(cached);
+            cache_creation = u
+                .pointer("/prompt_tokens_details/cache_creation_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(cache_creation);
+            cached_reasoning = u
+                .pointer("/completion_tokens_details/reasoning_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(cached_reasoning);
         }
         if let Some(c) = e
             .get("choices")
@@ -114,8 +294,38 @@ fn reduce_openai(bytes: &[u8], model: &str) -> Result<Value, AppError> {
         msg["tool_calls"] = Value::Array(calls)
     }
     Ok(
-        json!({"id":id.unwrap_or(json!(format!("chatcmpl-{}",uuid::Uuid::new_v4().simple()))),"object":"chat.completion","model":model,"choices":[{"index":0,"message":msg,"finish_reason":finish}],"usage":{"prompt_tokens":prompt,"completion_tokens":completion,"total_tokens":prompt+completion}}),
+        json!({"id":id.unwrap_or(json!(format!("chatcmpl-{}",uuid::Uuid::new_v4().simple()))),"object":"chat.completion","model":model,"choices":[{"index":0,"message":msg,"finish_reason":finish}],"usage":stream_usage(prompt, completion, cached, cache_creation, cached_reasoning)}),
     )
+}
+
+/// OpenAI-shaped usage with the cache counters re-attached, so the canonical
+/// conversion downstream can fold them like any other provider's.
+fn stream_usage(
+    prompt: i64,
+    completion: i64,
+    cached: i64,
+    cache_creation: i64,
+    reasoning: i64,
+) -> Value {
+    let mut usage = json!({
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    });
+    if cached > 0 || cache_creation > 0 {
+        let mut details = serde_json::Map::new();
+        if cached > 0 {
+            details.insert("cached_tokens".into(), json!(cached));
+        }
+        if cache_creation > 0 {
+            details.insert("cache_creation_tokens".into(), json!(cache_creation));
+        }
+        usage["prompt_tokens_details"] = Value::Object(details);
+    }
+    if reasoning > 0 {
+        usage["completion_tokens_details"] = json!({"reasoning_tokens": reasoning});
+    }
+    usage
 }
 
 fn reduce_claude(bytes: &[u8], model: &str) -> Result<Value, AppError> {
@@ -125,6 +335,11 @@ fn reduce_claude(bytes: &[u8], model: &str) -> Result<Value, AppError> {
     let mut stop = "end_turn".to_string();
     let mut input = 0;
     let mut output = 0;
+    // Claude reports cache tokens separately from input_tokens, on message_start
+    // (prompt side) and again on message_delta; both are carried through so the
+    // canonical conversion can fold them into the prompt count.
+    let mut cache_read = 0;
+    let mut cache_creation = 0;
     let mut active: Option<usize> = None;
     for e in events {
         match e.get("type").and_then(Value::as_str) {
@@ -134,7 +349,15 @@ fn reduce_claude(bytes: &[u8], model: &str) -> Result<Value, AppError> {
                 input = m
                     .pointer("/usage/input_tokens")
                     .and_then(Value::as_i64)
-                    .unwrap_or(input)
+                    .unwrap_or(input);
+                cache_read = m
+                    .pointer("/usage/cache_read_input_tokens")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(cache_read);
+                cache_creation = m
+                    .pointer("/usage/cache_creation_input_tokens")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(cache_creation);
             }
             Some("content_block_start") => {
                 let idx = e
@@ -216,13 +439,28 @@ fn reduce_claude(bytes: &[u8], model: &str) -> Result<Value, AppError> {
                 output = e
                     .pointer("/usage/output_tokens")
                     .and_then(Value::as_i64)
-                    .unwrap_or(output)
+                    .unwrap_or(output);
+                cache_read = e
+                    .pointer("/usage/cache_read_input_tokens")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(cache_read);
+                cache_creation = e
+                    .pointer("/usage/cache_creation_input_tokens")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(cache_creation);
             }
             _ => {}
         }
     }
+    let mut usage = json!({"input_tokens": input, "output_tokens": output});
+    if cache_read > 0 {
+        usage["cache_read_input_tokens"] = json!(cache_read);
+    }
+    if cache_creation > 0 {
+        usage["cache_creation_input_tokens"] = json!(cache_creation);
+    }
     Ok(
-        json!({"id":id.unwrap_or(json!(format!("msg_{}",uuid::Uuid::new_v4().simple()))),"type":"message","role":"assistant","model":model,"content":content,"stop_reason":stop,"stop_sequence":null,"usage":{"input_tokens":input,"output_tokens":output}}),
+        json!({"id":id.unwrap_or(json!(format!("msg_{}",uuid::Uuid::new_v4().simple()))),"type":"message","role":"assistant","model":model,"content":content,"stop_reason":stop,"stop_sequence":null,"usage":usage}),
     )
 }
 
@@ -480,4 +718,180 @@ fn responses_sse(b: &Value) -> Result<Vec<u8>, AppError> {
     }
     out.extend(line(&json!({"type":"response.completed","response":r})));
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_stream_cache_tokens_survive_reduction() {
+        let stream = [
+            "event: message_start",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4.5\",\"usage\":{\"input_tokens\":900,\"output_tokens\":0,\"cache_read_input_tokens\":21000,\"cache_creation_input_tokens\":3000}}}",
+            "",
+            "event: content_block_delta",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}",
+            "",
+            "event: message_delta",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":12}}",
+            "",
+            "event: message_stop",
+            "data: {\"type\":\"message_stop\"}",
+            "",
+        ]
+        .join("\n");
+
+        let reduced =
+            reduce_stream(stream.as_bytes(), Format::Claude, "claude-sonnet-4.5").unwrap();
+        assert_eq!(reduced["usage"]["input_tokens"], json!(900));
+        assert_eq!(reduced["usage"]["cache_read_input_tokens"], json!(21000));
+        assert_eq!(reduced["usage"]["cache_creation_input_tokens"], json!(3000));
+
+        // The canonical conversion is where the prompt total becomes the
+        // cache-inclusive count the dashboard and the pricing model both read.
+        let canonical = crate::translate::normalize_response(reduced, Format::Claude).unwrap();
+        let tokens = crate::translate::stored_tokens(&canonical["usage"]);
+        assert_eq!(tokens["prompt_tokens"], json!(24900));
+        assert_eq!(tokens["cached_tokens"], json!(21000));
+        assert_eq!(tokens["completion_tokens"], json!(12));
+    }
+
+    #[test]
+    fn openai_stream_cache_details_survive_reduction() {
+        let stream = [
+            "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}",
+            "",
+            "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5000,\"completion_tokens\":20,\"total_tokens\":5020,\"prompt_tokens_details\":{\"cached_tokens\":4096},\"completion_tokens_details\":{\"reasoning_tokens\":8}}}",
+            "",
+            "data: [DONE]",
+            "",
+        ]
+        .join("\n");
+
+        let reduced = reduce_stream(stream.as_bytes(), Format::OpenAi, "gpt-5.1").unwrap();
+        assert_eq!(
+            reduced["usage"]["prompt_tokens_details"]["cached_tokens"],
+            json!(4096)
+        );
+        assert_eq!(
+            reduced["usage"]["completion_tokens_details"]["reasoning_tokens"],
+            json!(8)
+        );
+
+        let canonical = crate::translate::normalize_response(reduced, Format::OpenAi).unwrap();
+        let tokens = crate::translate::stored_tokens(&canonical["usage"]);
+        assert_eq!(tokens["cached_tokens"], json!(4096));
+        assert_eq!(tokens["reasoning_tokens"], json!(8));
+    }
+}
+
+#[cfg(test)]
+mod sniffer_tests {
+    use super::*;
+
+    #[test]
+    fn claude_usage_is_collected_across_split_frames() {
+        let mut sniffer = UsageSniffer::new(Format::Claude);
+        // Frames arrive in fragments, as they do over a socket.
+        let payload = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":800,",
+            "\"cache_read_input_tokens\":19000,\"cache_creation_input_tokens\":2000,\"output_tokens\":0}}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        );
+        for fragment in payload.as_bytes().chunks(37) {
+            sniffer.feed(fragment);
+        }
+        let native = sniffer.native_usage();
+        assert_eq!(native["input_tokens"], json!(800));
+        assert_eq!(native["cache_read_input_tokens"], json!(19000));
+        assert_eq!(native["cache_creation_input_tokens"], json!(2000));
+        assert_eq!(
+            native["output_tokens"],
+            json!(7),
+            "message_delta updates output only"
+        );
+
+        let canonical = crate::translate::canonical_usage_from_native(&native, Format::Claude);
+        assert_eq!(canonical["prompt_tokens"], json!(21800));
+        assert_eq!(canonical["cached_tokens"], json!(19000));
+    }
+
+    #[test]
+    fn openai_and_gemini_usage_events_are_picked_up() {
+        let mut openai = UsageSniffer::new(Format::OpenAi);
+        openai.feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n");
+        openai.feed(b"data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":64}}}\n\n");
+        openai.feed(b"data: [DONE]\n\n");
+        assert_eq!(
+            openai.native_usage()["prompt_tokens_details"]["cached_tokens"],
+            json!(64)
+        );
+
+        let mut gemini = UsageSniffer::new(Format::Gemini);
+        gemini.feed(b"data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":50,\"cachedContentTokenCount\":40}}\n\n");
+        let canonical =
+            crate::translate::canonical_usage_from_native(&gemini.native_usage(), Format::Gemini);
+        assert_eq!(canonical["prompt_tokens"], json!(50));
+        assert_eq!(canonical["cached_tokens"], json!(40));
+    }
+
+    #[test]
+    fn junk_and_oversized_frames_do_not_poison_the_sniffer() {
+        let mut sniffer = UsageSniffer::new(Format::OpenAi);
+        sniffer.feed(b"data: not json at all\n\n");
+        sniffer.feed(&vec![b'x'; SNIFFER_MAX_PENDING + 1024]);
+        sniffer.feed(b"\ndata: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":1}}\n\n");
+        assert_eq!(sniffer.native_usage()["prompt_tokens"], json!(5));
+    }
+}
+
+#[cfg(test)]
+mod observed_tests {
+    use super::*;
+
+    #[test]
+    fn observed_only_after_a_usage_frame_arrives() {
+        let mut sniffer = UsageSniffer::new(Format::Claude);
+        // Text deltas alone must not count as observed usage.
+        sniffer.feed(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n");
+        assert!(!sniffer.observed(), "an abandoned stream has no usage yet");
+        sniffer.feed(b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":900}}}\n\n");
+        assert!(sniffer.observed());
+    }
+}
+
+#[cfg(test)]
+mod abort_frame_tests {
+    use super::*;
+
+    fn text(format: Format, message: &str) -> String {
+        String::from_utf8_lossy(&abort_terminal_frames(format, message)).to_string()
+    }
+
+    #[test]
+    fn every_client_format_gets_a_terminal_frame_it_can_parse() {
+        // An OpenAI-compatible client raises on a data payload carrying `error`,
+        // and only then stops at [DONE].
+        let openai = text(Format::OpenAi, "upstream stalled");
+        assert!(openai.contains("\"error\""), "{openai}");
+        assert!(openai.contains("upstream stalled"), "{openai}");
+        assert!(openai.ends_with("data: [DONE]\n\n"), "{openai}");
+
+        // Anthropic clients need a named event, not a bare data frame.
+        let claude = text(Format::Claude, "upstream stalled");
+        assert!(claude.starts_with("event: error\ndata: "), "{claude}");
+        assert!(claude.contains("\"type\":\"error\""), "{claude}");
+
+        // A Responses client is waiting for a terminal event of its own protocol.
+        let responses = text(Format::Responses, "stream closed");
+        assert!(responses.contains("event: response.failed"), "{responses}");
+        assert!(responses.contains("\"status\":\"failed\""), "{responses}");
+        assert!(responses.ends_with("data: [DONE]\n\n"), "{responses}");
+
+        // Gemini callers parse the Google error envelope.
+        let gemini = text(Format::Gemini, "upstream stalled");
+        assert!(gemini.contains("GATEWAY_TIMEOUT"), "{gemini}");
+    }
 }

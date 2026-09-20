@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::{
     auth, auto_router,
     error::AppError,
-    providers,
+    providers, responses_stream,
     state::AppState,
     streaming,
     translate::{self, Format},
@@ -238,13 +238,9 @@ pub async fn handle(
             Ok(mut resp) => {
                 crate::free_tier::note_result(&state, &target, true);
                 if let Some(plan) = auto_plan.as_ref() {
-                    auto_router::record_stream_estimate_if_passthrough(
-                        &state,
-                        plan,
-                        &target,
-                        caller,
-                        wants_stream,
-                    );
+                    // Streamed usage is recorded from the response stream itself
+                    // (see `record_usage`), so no estimate row is written here:
+                    // the two would double-count the same request.
                     auto_router::remember_success(plan, &target);
                     auto_router::annotate_response(&mut resp, plan, &target);
                 }
@@ -562,6 +558,13 @@ async fn execute_target(
             }
             Err(e) => {
                 tracing::warn!(provider=%resolved.provider, model=%resolved.model, error=%e, "provider account failed");
+                // A request-shaped 4xx says nothing about the credential, so it
+                // must not move the conversation to another account (which would
+                // abandon a warm prompt cache) or cool a healthy pool member for
+                // every later request. Hand the caller the upstream error once.
+                if e.request_scoped() {
+                    return Err(e);
+                }
                 crate::free_tier::note_result(state, target, false);
                 last = Some(e);
             }
@@ -632,7 +635,17 @@ async fn execute_connection(
     }
 
     let provider_format = Format::from_provider(transport_format);
-    let mut upstream_body = translate::provider_request(canonical.clone(), provider_format)?;
+    // `promptCacheTtl` lets a deployment whose turns are more than five minutes
+    // apart hold the head cache for an hour instead of rewriting it each turn.
+    let cache_ttl = translate::CacheTtl::from_setting(
+        state
+            .db
+            .settings()?
+            .get("promptCacheTtl")
+            .and_then(Value::as_str),
+    );
+    let mut upstream_body =
+        translate::provider_request_with_cache_ttl(canonical.clone(), provider_format, cache_ttl)?;
     upstream_body["model"] = Value::String(model.to_string());
     apply_provider_body_requirements(provider, &mut upstream_body);
 
@@ -691,12 +704,123 @@ async fn execute_connection(
 
     if wants_stream && caller == provider_format && upstream_stream {
         let headers = response.headers().clone();
-        let stream = response
-            .bytes_stream()
-            .map(|r| r.map_err(std::io::Error::other));
+        // The client gets these bytes verbatim, so this is the last chance to
+        // observe the usage event and price the request.
+        let usage_state = state.clone();
+        let usage_provider = provider.to_string();
+        let usage_model = model.to_string();
+        let usage_connection = connection
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let usage_endpoint = url.clone();
+        let mut sniffer = streaming::UsageSniffer::new(provider_format);
+        let mut upstream = response.bytes_stream();
+        let first_chunk_timeout = state.config.stream_first_chunk_timeout;
+        let stall_timeout = state.config.stream_stall_timeout;
+        // The client's own format decides the terminal frame shape: a stream that
+        // dies after HTTP 200 can no longer change its status code, so the only
+        // honest signal left is an in-band error, and a silent close reads as a
+        // complete answer to most clients.
+        let client_format = caller;
+        let stream = async_stream::stream! {
+            let mut flowing = false;
+            loop {
+                let limit = if flowing { stall_timeout } else { first_chunk_timeout };
+                let next = match tokio::time::timeout(limit, upstream.next()).await {
+                    Ok(next) => next,
+                    Err(_) => {
+                        let stage = if flowing { "stalled mid-stream" } else { "sent no first chunk" };
+                        yield Ok::<Bytes, std::io::Error>(streaming::abort_terminal_frames(
+                            client_format,
+                            &format!("upstream {stage} after {}s", limit.as_secs()),
+                        ));
+                        break;
+                    }
+                };
+                let Some(chunk) = next else { break };
+                match chunk {
+                    Ok(bytes) => {
+                        flowing = true;
+                        sniffer.feed(&bytes);
+                        yield Ok::<Bytes, std::io::Error>(bytes);
+                    }
+                    Err(error) => {
+                        yield Ok::<Bytes, std::io::Error>(streaming::abort_terminal_frames(
+                            client_format,
+                            &format!("upstream stream failed: {error}"),
+                        ));
+                        break;
+                    }
+                }
+            }
+            // A client that leaves before any usage event arrived leaves nothing
+            // to record; a zero row would only pollute the request list.
+            if sniffer.observed() {
+                record_usage(
+                    &usage_state,
+                    &usage_provider,
+                    &usage_model,
+                    usage_connection.as_deref(),
+                    &usage_endpoint,
+                    translate::canonical_usage_from_native(&sniffer.native_usage(), provider_format),
+                    started.elapsed().as_millis() as u64,
+                );
+            }
+        };
         let mut out = Response::new(Body::from_stream(stream));
         *out.status_mut() = StatusCode::OK;
         copy_response_headers(&headers, out.headers_mut());
+        return Ok(out);
+    }
+
+    // Cross-format streaming: a Chat Completions caller of a Responses provider.
+    // Buffering here would make the client wait for the whole generation before
+    // its first token, so the events are translated as they arrive instead.
+    if wants_stream
+        && upstream_stream
+        && caller == Format::OpenAi
+        && provider_format == Format::Responses
+        && responses_stream::upstream_is_event_stream(content_type.as_deref())
+    {
+        let headers = response.headers().clone();
+        let usage_state = state.clone();
+        let usage_provider = provider.to_string();
+        let usage_model = model.to_string();
+        let usage_connection = connection
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let usage_endpoint = url.clone();
+        let usage_started = started;
+        let stream = responses_stream::incremental_chat_stream(
+            response.bytes_stream(),
+            model.to_string(),
+            responses_stream::StreamGuards {
+                first_chunk: state.config.stream_first_chunk_timeout,
+                stall: state.config.stream_stall_timeout,
+            },
+            move |pipeline| {
+                if pipeline.observed() {
+                    record_usage(
+                        &usage_state,
+                        &usage_provider,
+                        &usage_model,
+                        usage_connection.as_deref(),
+                        &usage_endpoint,
+                        pipeline.canonical_usage(),
+                        usage_started.elapsed().as_millis() as u64,
+                    );
+                }
+            },
+        );
+        let mut out = Response::new(Body::from_stream(stream));
+        *out.status_mut() = StatusCode::OK;
+        copy_response_headers(&headers, out.headers_mut());
+        out.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        );
         return Ok(out);
     }
 
@@ -716,21 +840,14 @@ async fn execute_connection(
         .get("usage")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let _ = state.db.usage_record(
-        Some(provider),
-        Some(model),
+    record_usage(
+        state,
+        provider,
+        model,
         connection.get("id").and_then(Value::as_str),
         &url,
-        usage
-            .get("prompt_tokens")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        usage
-            .get("completion_tokens")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        "ok",
-        &json!({"durationMs":started.elapsed().as_millis()}),
+        usage,
+        started.elapsed().as_millis() as u64,
     );
 
     if wants_stream {
@@ -739,6 +856,40 @@ async fn execute_connection(
     }
     let final_body = translate::caller_response(canonical_response, caller)?;
     json_response(StatusCode::OK, final_body)
+}
+
+/// Write one finished request to the usage ledger.
+///
+/// `usage` is canonical (see `translate::stored_tokens`), so the cache counters
+/// the dashboard reads are recorded rather than dropped, and the cost is priced
+/// here because the dashboard only reads the stored number back. Cache reads
+/// bill at their own rate, which is what turns a hit into visible savings.
+fn record_usage(
+    state: &AppState,
+    provider: &str,
+    model: &str,
+    connection_id: Option<&str>,
+    endpoint: &str,
+    usage: Value,
+    duration_ms: u64,
+) {
+    let tokens = translate::stored_tokens(&usage);
+    let user_pricing = state
+        .db
+        .kv_all("pricing")
+        .map(Value::Object)
+        .unwrap_or_else(|_| json!({}));
+    let cost = crate::pricing::cost_for(Some(&user_pricing), provider, model, &tokens);
+    let _ = state.db.usage_record_tokens(
+        Some(provider),
+        Some(model),
+        connection_id,
+        endpoint,
+        &tokens,
+        cost,
+        "ok",
+        &json!({"durationMs": duration_ms}),
+    );
 }
 
 pub(crate) fn build_format_url(base: &str, format: Format, model: &str, stream: bool) -> String {
@@ -928,6 +1079,8 @@ mod compact_tests {
                 data_dir: temp.path().to_path_buf(),
                 db_path,
                 upstream_timeout_secs: 1,
+                stream_first_chunk_timeout: std::time::Duration::from_secs(200),
+                stream_stall_timeout: std::time::Duration::from_secs(360),
                 ui_only_header_secret: "test-only".into(),
                 legacy_backend_origin: None,
                 compat_api_enabled: false,
@@ -935,6 +1088,50 @@ mod compact_tests {
             db,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_finished_request_lands_in_the_ledger_with_cache_and_cost() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = test_state(&temp);
+        let usage = json!({
+            "input_tokens": 1000,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 20000,
+            "cache_creation_input_tokens": 4000,
+        });
+        record_usage(
+            &state,
+            "claude",
+            "claude-sonnet-4.5",
+            Some("conn-1"),
+            "https://api.anthropic.com/v1/messages",
+            translate::canonical_usage_from_native(&usage, Format::Claude),
+            42,
+        );
+
+        let stats = state.db.usage_stats("all").unwrap();
+        assert_eq!(stats["totalCachedTokens"], json!(20000));
+        assert_eq!(stats["totalPromptTokens"], json!(25000));
+        // Rates come from the exported table, which is the same one the
+        // dashboard prices with: (1000 uncached * 3 + 20000 cached * 0.3
+        //  + 4000 creation * 3 + 50 output * 15) / 1e6.
+        let cost = stats["totalCost"].as_f64().unwrap();
+        assert!((cost - 0.02175).abs() < 1e-9, "{cost}");
+
+        // A provider that answers without a usage event still counts as a request.
+        let before = stats["totalRequests"].as_i64().unwrap();
+        record_usage(
+            &state,
+            "claude",
+            "claude-sonnet-4.5",
+            Some("conn-1"),
+            "https://api.anthropic.com/v1/messages",
+            translate::canonical_usage_from_native(&json!({}), Format::Claude),
+            5,
+        );
+        let after = state.db.usage_stats("all").unwrap();
+        assert_eq!(after["totalRequests"].as_i64().unwrap(), before + 1);
     }
 
     #[test]
@@ -979,6 +1176,8 @@ mod compact_tests {
                 data_dir: temp.path().to_path_buf(),
                 db_path,
                 upstream_timeout_secs: 1,
+                stream_first_chunk_timeout: std::time::Duration::from_secs(200),
+                stream_stall_timeout: std::time::Duration::from_secs(360),
                 ui_only_header_secret: "test-only".into(),
                 legacy_backend_origin: None,
                 compat_api_enabled: false,
@@ -1111,6 +1310,8 @@ mod compact_tests {
                 data_dir: temp.path().to_path_buf(),
                 db_path,
                 upstream_timeout_secs: 1,
+                stream_first_chunk_timeout: std::time::Duration::from_secs(200),
+                stream_stall_timeout: std::time::Duration::from_secs(360),
                 ui_only_header_secret: "test-only".into(),
                 legacy_backend_origin: None,
                 compat_api_enabled: false,

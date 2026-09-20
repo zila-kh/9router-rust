@@ -445,6 +445,8 @@ mod release_review_tests {
             data_dir: temp.path().to_path_buf(),
             db_path,
             upstream_timeout_secs: 1,
+            stream_first_chunk_timeout: std::time::Duration::from_secs(200),
+            stream_stall_timeout: std::time::Duration::from_secs(360),
             ui_only_header_secret: "test-internal-secret".into(),
             legacy_backend_origin: None,
             compat_api_enabled: compat,

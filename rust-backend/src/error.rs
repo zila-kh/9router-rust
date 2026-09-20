@@ -53,6 +53,24 @@ impl IntoResponse for AppError {
 }
 
 impl AppError {
+    /// A 4xx that describes *this request* — context overflow, malformed body,
+    /// an unsupported parameter — rather than the credential.
+    ///
+    /// Retrying one on another account cannot succeed: it multiplies the same
+    /// failing call across every connection and rotates the conversation off the
+    /// account whose prompt cache it was using. Account-scoped statuses
+    /// (401/402/403/404/429) keep their own rules; this matches upstream's
+    /// `checkFallbackError`, which refuses to fall back for exactly the statuses
+    /// left over here.
+    pub fn request_scoped(&self) -> bool {
+        match self {
+            Self::UpstreamHttp { status, .. } => {
+                (400..500).contains(status) && !matches!(status, 401 | 402 | 403 | 404 | 429)
+            }
+            _ => false,
+        }
+    }
+
     pub fn auto_route_retryable(&self) -> bool {
         match self {
             // Network failures and provider-specific HTTP failures are normally
@@ -127,5 +145,37 @@ mod release_error_tests {
         let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body, json!({"error":"Upstream request failed"}));
+    }
+}
+
+#[cfg(test)]
+mod request_scoped_tests {
+    use super::AppError;
+
+    fn http(status: u16) -> AppError {
+        AppError::UpstreamHttp {
+            status,
+            message: "upstream".into(),
+        }
+    }
+
+    #[test]
+    fn request_shaped_4xx_never_rotates_accounts() {
+        // Context overflow, oversized payloads and malformed bodies fail the same
+        // way on every account, so another account is not an answer.
+        for status in [400, 405, 409, 413, 415, 422, 431, 451] {
+            assert!(http(status).request_scoped(), "{status}");
+        }
+    }
+
+    #[test]
+    fn account_scoped_statuses_keep_retrying_elsewhere() {
+        // These can be account-, quota- or model-specific, so the next account is
+        // exactly the right move.
+        for status in [401, 402, 403, 404, 429, 500, 502, 503, 504] {
+            assert!(!http(status).request_scoped(), "{status}");
+        }
+        // Transport failures carry no status and stay retryable.
+        assert!(!AppError::Upstream("connection reset".into()).request_scoped());
     }
 }

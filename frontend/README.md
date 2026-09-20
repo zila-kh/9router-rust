@@ -548,6 +548,10 @@ Without RTK: 47K tokens sent to LLM
 With RTK:    28K tokens sent to LLM   (40% saved · same context · same answer)
 ```
 
+### 💬 Optional OpenCode Quick-Chat Agent
+
+For general questions that do not need project tools, use a primary agent with all tools denied. This can reduce repeated tool-definition overhead in OpenCode requests. Copy the [quick-chat agent preset](../docs/opencode/quick-chat.md) to `.opencode/agents/quick-chat.md` in a project or `~/.config/opencode/agents/quick-chat.md` globally. The preset inherits OpenCode's configured model, so it works with OpenCode Go and other configured providers. Switch back to a tool-enabled agent for coding tasks.
+
 ### 🧠 Headroom Token Saver
 
 Headroom is optional and runs separately. 9Router calls Headroom's local `/v1/compress` endpoint, then keeps normal routing, fallback, auth, and usage tracking:
