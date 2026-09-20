@@ -1380,9 +1380,8 @@ async fn dynamic(
     if path.starts_with("/api/cli-tools/") {
         return crate::remaining_infra::handle_cli_tools(state, method, path, &body).await;
     }
-    if path.starts_with("/api/auth/oidc/") || path.starts_with("/api/auth/saml/") {
-        return crate::remaining_infra::handle_oidc_saml(state, method, path, &body).await;
-    }
+    // SSO routes are served natively in every mode by `crate::sso::handle`
+    // before management dispatch reaches this point.
     if path.starts_with("/api/headroom")
         || path.starts_with("/api/pxpipe")
         || path.starts_with("/api/tunnel")

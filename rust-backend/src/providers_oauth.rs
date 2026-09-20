@@ -101,6 +101,12 @@ pub async fn handle_oauth(
     body: &Value,
 ) -> Result<Response<Body>, AppError> {
     let sub = path.strip_prefix("/api/oauth/").unwrap_or("");
+    if sub == "xiaomi-mimo/auto-import" && method == Method::GET {
+        return crate::sso_xiaomi::handle_auto_import(state).await;
+    }
+    if sub == "xiaomi-mimo/api-key" && method == Method::POST {
+        return crate::sso_xiaomi::handle_api_key(state, body).await;
+    }
     match method.as_str() {
         "GET" => {
             let state_nonce = uuid::Uuid::new_v4().to_string();

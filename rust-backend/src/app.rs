@@ -78,19 +78,9 @@ async fn entry(
         || media::is_media_path(&path)
         || gateway::is_llm_path(&path)
         || path.starts_with("/api/");
-    let is_native_sso = !state.config.compat_api_enabled
-        && (path == "/api/auth/oidc"
-            || path.starts_with("/api/auth/oidc/")
-            || path == "/api/auth/saml"
-            || path.starts_with("/api/auth/saml/"));
+    let is_native_sso = crate::sso::is_sso_path(&path);
     let result: Result<Response<Body>, AppError> = if is_native_sso {
-        crate::remaining_infra::handle_oidc_saml(
-            &state,
-            req.method(),
-            &path,
-            &serde_json::Value::Null,
-        )
-        .await
+        crate::sso::handle(state, peer, req).await
     } else if is_compat_media {
         compat_media::handle(state, peer, req).await
     } else if media::is_media_path(&path) {
@@ -223,6 +213,8 @@ fn native_in_compat_mode(method: &Method, path: &str) -> bool {
                 | ("POST", "/api/auth/logout")
                 | ("GET", "/api/auth/status")
                 | ("POST", "/api/auth/reset-password")
+                | ("POST", "/api/oauth/xiaomi-mimo/api-key")
+                | ("GET", "/api/oauth/xiaomi-mimo/auto-import")
         )
 }
 
