@@ -30,7 +30,7 @@ http = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
-jsonwebtoken = "9"
+jsonwebtoken = "11"
 multer = "3"
 once_cell = "1"
 rand = "0.9"
