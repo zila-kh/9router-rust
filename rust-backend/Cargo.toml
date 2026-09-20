@@ -14,7 +14,7 @@ anyhow = "1"
 async-stream = "0.3"
 axum = { version = "0.8", features = ["macros", "multipart", "ws"] }
 base64 = "0.22"
-bcrypt = "0.17"
+bcrypt = "0.19"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 crc32fast = "1"
