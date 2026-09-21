@@ -401,7 +401,11 @@ pub fn require_llm(
     peer: SocketAddr,
     query_key: Option<&str>,
 ) -> Result<(), AppError> {
-    if has_valid_cli_token(state, headers) {
+    // Dashboard-owned clients (including Playground Chat) use the same public
+    // inference routes as API consumers. A valid HttpOnly dashboard session is
+    // therefore an explicit credential here, while unauthenticated local calls
+    // still follow the normal requireApiKey policy below.
+    if has_valid_cli_token(state, headers) || has_valid_dashboard_session(state, headers) {
         return Ok(());
     }
     let settings = state.db.settings()?;
@@ -588,5 +592,37 @@ mod tests {
             HeaderValue::from_str(&format!("auth_token={token}")).expect("valid session cookie"),
         );
         assert!(require_dashboard_admin(&state, &headers).is_ok());
+    }
+
+    #[test]
+    fn llm_gate_accepts_a_valid_dashboard_session() {
+        let temp = tempfile::tempdir().expect("temporary data directory");
+        let config = crate::config::Config {
+            listen: "127.0.0.1:20130".parse().expect("valid listen address"),
+            ui_origin: "http://127.0.0.1:20129".into(),
+            data_dir: temp.path().to_path_buf(),
+            db_path: temp.path().join("data.sqlite"),
+            upstream_timeout_secs: 1,
+            stream_first_chunk_timeout: std::time::Duration::from_secs(200),
+            stream_stall_timeout: std::time::Duration::from_secs(360),
+            ui_only_header_secret: "test-secret".into(),
+            legacy_backend_origin: None,
+            compat_api_enabled: false,
+        };
+        let db = crate::db::Db::open(&config.db_path).expect("test database");
+        db.update_settings(json!({"requireLogin": true, "requireApiKey": true}))
+            .expect("enable authentication");
+        let state = AppState::new(config, db).expect("test app state");
+
+        assert!(require_llm(&state, &HeaderMap::new(), peer("127.0.0.1:1234"), None).is_err());
+
+        let token =
+            create_session_token(&state, serde_json::Map::new()).expect("create dashboard session");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("auth_token={token}")).expect("valid session cookie"),
+        );
+        assert!(require_llm(&state, &headers, peer("127.0.0.1:1234"), None).is_ok());
     }
 }

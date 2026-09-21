@@ -209,6 +209,8 @@ async fn dispatch(
         return crate::free_tier::handle_admin_api(state, method, path, body).await;
     }
     match (method.as_str(), path) {
+        ("GET", "/api/playground/targets") => crate::benchmark::targets(state),
+        ("POST", "/api/playground/benchmark") => crate::benchmark::start(state.clone(), body),
         ("GET", "/api/health") => json_response(
             StatusCode::OK,
             json!({"status":"ok","version":env!("CARGO_PKG_VERSION"),"runtime":"rust","upstreamSnapshot":"17c4cc76877bd1755030a8414f8d0083f48dcccf"}),

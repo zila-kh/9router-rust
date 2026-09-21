@@ -18,6 +18,7 @@ mod api_errors;
 mod app;
 mod auth;
 mod auto_router;
+mod benchmark;
 mod compat_media;
 mod compat_proxy;
 mod config;

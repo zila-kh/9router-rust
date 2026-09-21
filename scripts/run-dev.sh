@@ -43,6 +43,7 @@ case "$NINEROUTER_HOST" in
   *) PUBLIC_READY_HOST="$NINEROUTER_HOST" ;;
 esac
 PUBLIC_BASE_URL="http://${PUBLIC_READY_HOST}:${PORT}"
+export NINEROUTER_PUBLIC_ORIGIN="$PUBLIC_BASE_URL"
 
 # Normalize once before Rust and Next start from different working directories.
 storage_exports="$(python3 scripts/normalize-storage-paths.py)"

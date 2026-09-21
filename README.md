@@ -80,7 +80,7 @@ Inspect `x-9router-runtime` on API responses:
 - `upstream-compat` — authenticated or admitted by Rust, then handled by the pinned upstream API route;
 - `legacy-bridge` — old full-backend bridge mode, only when explicitly configured.
 
-The internal Next listener rejects `/api`, `/v1`, `/v1beta`, `/responses`, and `/codex` requests unless Rust provides the matching `x-9router-ui-secret` value. The launcher binds Next to loopback and sets `NINEROUTER_DISABLE_LEGACY_BRIDGE=1`.
+The internal Next listener rejects `/api`, `/v1`, `/v1beta`, `/responses`, and `/codex` requests unless Rust provides the matching `x-9router-ui-secret` value. Browser page requests made directly to that listener are redirected to the Rust-owned public origin. The launcher binds Next to loopback and sets `NINEROUTER_DISABLE_LEGACY_BRIDGE=1`.
 
 Rust mirrors upstream route security classes before delegation. Normal dashboard APIs require a dashboard session or the upstream-compatible `x-9r-cli-token`; update, shutdown, and database operations require a valid session or CLI token even when dashboard login is disabled. Host-control operations such as MCP, tunnel control, CLI configuration, OAuth auto-import, and Headroom control require either a valid CLI token or an authenticated direct-loopback request. Forwarded-peer headers prevent a reverse proxy hop from being mistaken for a local user.
 
@@ -113,6 +113,7 @@ NINEROUTER_UI_ONLY=1
 NINEROUTER_COMPAT_API=1
 NINEROUTER_UI_SECRET=<random shared token>
 NINEROUTER_UI_ORIGIN=http://127.0.0.1:20129
+NINEROUTER_PUBLIC_ORIGIN=http://127.0.0.1:20130
 NINEROUTER_DISABLE_LEGACY_BRIDGE=1
 ```
 

@@ -183,6 +183,8 @@ async function startStack(isDev) {
   }
 
   const expectedUiOrigin = `http://127.0.0.1:${uiPort}`;
+  const publicHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  const publicOrigin = `http://${publicHost.includes(":") ? `[${publicHost}]` : publicHost}:${appPort}`;
   const uiSecret = process.env.NINEROUTER_UI_SECRET || crypto.randomBytes(32).toString("hex");
 
   const commonEnv = {
@@ -191,6 +193,7 @@ async function startStack(isDev) {
     NINEROUTER_COMPAT_API: process.env.NINEROUTER_COMPAT_API || "1",
     NINEROUTER_UI_PORT: String(uiPort),
     NINEROUTER_UI_ORIGIN: expectedUiOrigin,
+    NINEROUTER_PUBLIC_ORIGIN: publicOrigin,
     NINEROUTER_HOST: host,
     PORT: String(appPort),
     NINEROUTER_DISABLE_LEGACY_BRIDGE: "1",
@@ -287,7 +290,7 @@ async function startStack(isDev) {
 
   await waitReady("Rust backend", `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${appPort}/api/health`, rustProc, 90);
 
-  const publicUrl = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${appPort}`;
+  const publicUrl = publicOrigin;
   console.log("\n" + "=".repeat(60));
   console.log(`  9Router Rust ${isDev ? "development" : "production"} stack is running!`);
   console.log(`  Dashboard:  ${publicUrl}/dashboard`);

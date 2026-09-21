@@ -9,19 +9,28 @@ function isBackendPath(pathname) {
   );
 }
 
-function isCompatApiPath(pathname) {
-  return pathname === "/api" || pathname.startsWith("/api/");
-}
-
 function isTrustedRustRequest(request) {
   const configured = process.env.NINEROUTER_UI_SECRET;
   const supplied = request.headers.get(INTERNAL_SECRET_HEADER);
   return Boolean(configured && supplied && supplied === configured);
 }
 
+function publicAppUrl(request) {
+  const configured = process.env.NINEROUTER_PUBLIC_ORIGIN;
+  if (!configured) return null;
+
+  try {
+    const target = new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, configured);
+    if (!['http:', 'https:'].includes(target.protocol)) return null;
+    return target;
+  } catch {
+    return null;
+  }
+}
+
 export default async function proxy(request) {
   if (process.env.NINEROUTER_UI_ONLY === "1") {
-    if (isCompatApiPath(request.nextUrl.pathname) && isTrustedRustRequest(request)) {
+    if (isTrustedRustRequest(request)) {
       return NextResponse.next();
     }
     if (isBackendPath(request.nextUrl.pathname)) {
@@ -29,6 +38,10 @@ export default async function proxy(request) {
         { error: "Rust backend required", code: "RUST_BACKEND_REQUIRED" },
         { status: 421, headers: { "Cache-Control": "no-store" } },
       );
+    }
+    const publicUrl = publicAppUrl(request);
+    if (publicUrl) {
+      return NextResponse.redirect(publicUrl, 307);
     }
     return NextResponse.next();
   }

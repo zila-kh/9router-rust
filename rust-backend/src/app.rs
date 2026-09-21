@@ -203,7 +203,9 @@ async fn handle_management(
 }
 
 fn native_in_compat_mode(method: &Method, path: &str) -> bool {
-    path == "/api/free-tier"
+    path == "/api/playground/targets"
+        || path == "/api/playground/benchmark"
+        || path == "/api/free-tier"
         || path.starts_with("/api/free-tier/")
         || matches!(
             (method.as_str(), path),
@@ -537,5 +539,31 @@ mod release_review_tests {
             .to_str()
             .unwrap()
             .starts_with("locale=km;"));
+    }
+
+    #[tokio::test]
+    async fn playground_benchmark_routes_require_a_dashboard_session() {
+        let (_temp, state) = test_state(true);
+        state
+            .db
+            .update_settings(json!({"requireLogin":true}))
+            .unwrap();
+        for (method, path) in [
+            (Method::GET, "/api/playground/targets"),
+            (Method::POST, "/api/playground/benchmark"),
+        ] {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo("127.0.0.1:1234".parse::<SocketAddr>().unwrap()));
+            let response = router(state.clone()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            assert_eq!(response.headers()["x-9router-runtime"], "rust");
+        }
     }
 }

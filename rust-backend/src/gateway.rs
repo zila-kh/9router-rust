@@ -584,7 +584,7 @@ fn require_executable_provider(provider: &str) -> Result<(), AppError> {
     )))
 }
 
-async fn execute_connection(
+pub(crate) async fn execute_connection(
     state: &AppState,
     client_headers: &HeaderMap,
     caller: Format,

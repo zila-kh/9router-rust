@@ -218,8 +218,12 @@ export default function BasicChatPageClient() {
       setLoadError("");
 
       try {
-        const providersRes = await fetch("/api/providers", { cache: "no-store" });
+        const [providersRes, combosRes] = await Promise.all([
+          fetch("/api/providers", { cache: "no-store" }),
+          fetch("/api/combos", { cache: "no-store" }),
+        ]);
         const providersData = await providersRes.json().catch(() => ({}));
+        const combosData = await combosRes.json().catch(() => ({}));
         const connections = Array.isArray(providersData.connections)
           ? providersData.connections.filter((connection) => connection?.isActive !== false)
           : [];
@@ -294,6 +298,26 @@ export default function BasicChatPageClient() {
           }))
           .filter((group) => group.models.length > 0)
           .sort((a, b) => a.providerName.localeCompare(b.providerName));
+
+        const comboModels = (Array.isArray(combosData.combos) ? combosData.combos : [])
+          .filter((combo) => !combo.kind || combo.kind === "llm")
+          .map((combo) => ({
+            id: combo.name,
+            requestModel: combo.name,
+            name: combo.name,
+            providerId: "__combos__",
+            providerName: "Combos",
+            source: "combo",
+          }));
+        if (comboModels.length > 0) {
+          normalized.unshift({
+            providerId: "__combos__",
+            providerName: "Combos",
+            providerType: "combo",
+            connections: [],
+            models: comboModels,
+          });
+        }
 
         if (!cancelled) {
           setProviderGroups(normalized);
@@ -636,7 +660,10 @@ export default function BasicChatPageClient() {
       }));
 
     try {
-      const response = await fetch("/api/dashboard/chat/completions", {
+      const requestStartedAt = performance.now();
+      let firstTextAt = null;
+      let usage = null;
+      const response = await fetch("/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -646,6 +673,7 @@ export default function BasicChatPageClient() {
           model: model.requestModel || model.id,
           messages: requestMessages,
           stream: true,
+          stream_options: { include_usage: true },
         }),
         signal: abortRef.current.signal,
       });
@@ -689,8 +717,10 @@ export default function BasicChatPageClient() {
           try {
             const chunk = JSON.parse(payload);
             const text = readAssistantText(chunk);
+            if (chunk.usage) usage = chunk.usage;
             if (!text) continue;
 
+            if (firstTextAt == null) firstTextAt = performance.now();
             assistantText += text;
             setStreamingText(assistantText);
             updateSession(sessionId, (currentSession) => ({
@@ -704,9 +734,20 @@ export default function BasicChatPageClient() {
         }
       }
 
+      const completedAt = performance.now();
+      const outputTokens = Number(usage?.completion_tokens ?? usage?.output_tokens);
+      const totalMs = Math.max(0, completedAt - requestStartedAt);
+      const metrics = {
+        ttftMs: firstTextAt == null ? null : Math.max(0, firstTextAt - requestStartedAt),
+        totalMs,
+        outputTokens: Number.isFinite(outputTokens) && outputTokens > 0 ? outputTokens : null,
+        endToEndTps: Number.isFinite(outputTokens) && outputTokens > 0 && totalMs > 0
+          ? outputTokens / (totalMs / 1000)
+          : null,
+      };
       updateSession(sessionId, (currentSession) => ({
         ...currentSession,
-        messages: currentSession.messages.map((message) => (message.id === assistantMessageId ? { ...message, content: assistantText || message.content, status: "done" } : message)),
+        messages: currentSession.messages.map((message) => (message.id === assistantMessageId ? { ...message, content: assistantText || message.content, status: "done", metrics } : message)),
         updatedAt: new Date().toISOString(),
       }));
       finalizeSessionTitle(sessionId, userText);
@@ -901,6 +942,14 @@ export default function BasicChatPageClient() {
                         {content}
                         {isAssistant && isStreaming && !streamingText ? <span className="inline-block animate-pulse">▋</span> : null}
                       </div>
+                      {isAssistant && message.metrics ? (
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/40">
+                          <span>TTFT {message.metrics.ttftMs == null ? "—" : `${Math.round(message.metrics.ttftMs)}ms`}</span>
+                          <span>Total {Math.round(message.metrics.totalMs)}ms</span>
+                          <span>Tokens {message.metrics.outputTokens ?? "—"}</span>
+                          <span>{message.metrics.endToEndTps == null ? "— tok/s" : `${message.metrics.endToEndTps.toFixed(2)} tok/s`}</span>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 );
